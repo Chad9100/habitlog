@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from habitlog import streaks
 from habitlog.streaks import (
     completion_rate,
     current_streak,
@@ -298,3 +299,68 @@ def test_rate_rejects_zero_weeks():
 def test_unknown_frequency_is_rejected():
     with pytest.raises(ValueError):
         current_streak({}, "monthly", 1, WED)
+
+
+# --------------------------------------------------------------------------- months
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [("2026-03", date(2026, 3, 1)), (" 2026-12 ", date(2026, 12, 1)), ("0001-01", date(1, 1, 1))],
+)
+def test_parse_month_valid(text, expected):
+    assert streaks.parse_month(text) == expected
+
+
+@pytest.mark.parametrize("text", ["2026-13", "2026-00", "2026-3", "2026/03", "0000-01", "", None])
+def test_parse_month_invalid(text):
+    with pytest.raises(ValueError, match="expected YYYY-MM"):
+        streaks.parse_month(text)
+
+
+@pytest.mark.parametrize(
+    "d, expected",
+    [
+        (date(2026, 2, 10), date(2026, 2, 28)),
+        (date(2024, 2, 1), date(2024, 2, 29)),
+        (date(2026, 12, 31), date(2026, 12, 31)),
+        (date(2026, 4, 1), date(2026, 4, 30)),
+    ],
+)
+def test_month_end(d, expected):
+    assert streaks.month_end(d) == expected
+
+
+def test_rate_between_daily_clamps_to_today_and_skips_open_day():
+    today = date(2026, 3, 4)  # Wednesday
+    counts = {date(2026, 3, 1): 1, date(2026, 3, 3): 1}
+    r = streaks.rate_between(counts, "daily", 1, date(2026, 3, 1), date(2026, 3, 31), today)
+    # 1, 2, 3 March count; today (4th) is open and not met yet.
+    assert (r.end, r.periods_total, r.periods_met) == (today, 3, 2)
+    counts[today] = 1
+    r = streaks.rate_between(counts, "daily", 1, date(2026, 3, 1), date(2026, 3, 31), today)
+    assert (r.periods_total, r.periods_met) == (4, 3)
+
+
+def test_rate_between_weekly_counts_weeks_overlapping_the_range():
+    today = date(2026, 3, 18)
+    counts = {date(2026, 2, 23): 2, date(2026, 3, 1): 1, date(2026, 3, 10): 3}
+    r = streaks.rate_between(counts, "weekly", 3, date(2026, 3, 1), date(2026, 3, 31), today)
+    # Weeks of Feb 23 (met: 2 + 1 on Sunday Mar 1), Mar 2 (not), Mar 9 (met);
+    # the week of Mar 16 is open and unmet, so it is left out.
+    assert (r.periods_total, r.periods_met) == (3, 2)
+
+
+def test_rate_between_start_after_today_is_empty():
+    today = date(2026, 3, 4)
+    r = streaks.rate_between({}, "daily", 1, date(2026, 3, 10), date(2026, 3, 31), today)
+    assert (r.periods_total, r.rate) == (0, None)
+
+
+def test_completion_rate_unchanged_by_refactor():
+    today = date(2026, 3, 4)
+    counts = {date(2026, 3, 2): 1, date(2026, 3, 3): 1, date(2026, 2, 24): 1}
+    r = streaks.completion_rate(counts, "weekdays", 1, today, weeks=2)
+    assert (r.start, r.end, r.periods_total, r.periods_met) == (
+        date(2026, 2, 23), today, 7, 3,
+    )

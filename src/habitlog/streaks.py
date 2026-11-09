@@ -34,6 +34,7 @@ ONE_DAY = timedelta(days=1)
 ONE_WEEK = timedelta(days=7)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 
 
 def parse_date(text: str) -> date:
@@ -44,6 +45,20 @@ def parse_date(text: str) -> date:
         return date.fromisoformat(text.strip())
     except ValueError:
         raise ValueError(f"invalid date {text!r}, expected YYYY-MM-DD") from None
+
+
+def parse_month(text: str) -> date:
+    """Parse a strict ``YYYY-MM`` month into its first day, raising ``ValueError`` otherwise."""
+    m = _MONTH_RE.match(text.strip()) if isinstance(text, str) else None
+    if m is None or not 1 <= int(m.group(2)) <= 12 or int(m.group(1)) < 1:
+        raise ValueError(f"invalid month {text!r}, expected YYYY-MM")
+    return date(int(m.group(1)), int(m.group(2)), 1)
+
+
+def month_end(d: date) -> date:
+    """Last day of the month containing ``d``."""
+    first_of_next = date(d.year + d.month // 12, d.month % 12 + 1, 1)
+    return first_of_next - ONE_DAY
 
 
 def _check_every(every: str) -> None:
@@ -208,13 +223,34 @@ def completion_rate(
     start = week_start(today) - ONE_WEEK * (weeks - 1)
     if since is not None and since > start:
         start = min(since, today)
+    return rate_between(counts, every, target, start, today, today)
+
+
+def rate_between(
+    counts: Mapping[date, int],
+    every: str,
+    target: int,
+    start: date,
+    end: date,
+    today: date,
+) -> Rate:
+    """Share of met periods from the period containing ``start`` up to ``end``.
+
+    Periods after ``today`` are not counted, and the open period (the one
+    containing ``today``) only counts once it is met. For weekly habits every
+    ISO week that overlaps ``start..end`` is a period, even if it begins
+    before ``start``. ``end`` is clamped to ``today``; if ``start`` is after
+    ``end`` the result has no periods.
+    """
+    end = min(end, today)
     totals = period_totals(counts, every)
     current = open_period(today, every)
     total = met = 0
-    for p in iter_periods(start, today, every):
-        ok = totals.get(p, 0) >= target
-        if p == current and not ok:
-            continue
-        total += 1
-        met += ok
-    return Rate(start, today, total, met)
+    if start <= end:
+        for p in iter_periods(start, end, every):
+            ok = totals.get(p, 0) >= target
+            if p == current and not ok:
+                continue
+            total += 1
+            met += ok
+    return Rate(start, end, total, met)

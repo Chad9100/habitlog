@@ -49,6 +49,13 @@ def _nonnegative_int(text: str) -> int:
     return value
 
 
+def _month_arg(text: str) -> date:
+    try:
+        return streaks.parse_month(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def _check_not_future(day: date, today: date) -> None:
     if day > today:
         raise HabitlogError(f"{day.isoformat()} is in the future (today is {today.isoformat()})")
@@ -329,6 +336,94 @@ def cmd_log(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     return EXIT_OK
 
 
+def _month_rate(habit: Habit, counts: dict[date, int], month: date, today: date) -> streaks.Rate:
+    """Periods met in ``month`` (up to today), counted from when the habit started."""
+    since = min([habit.created, *counts]) if counts else habit.created
+    return streaks.rate_between(
+        counts, habit.every, habit.target, max(month, since), streaks.month_end(month), today
+    )
+
+
+def _rate_text(rate: streaks.Rate, every: str) -> str:
+    word = {"daily": "days", "weekdays": "weekdays", "weekly": "weeks"}[every]
+    pct = "n/a" if rate.rate is None else f"{rate.rate * 100:.0f}%"
+    return f"{rate.periods_met}/{rate.periods_total} {word} met ({pct})"
+
+
+def _month_json(
+    habit: Habit, counts: dict[date, int], rate: streaks.Rate, month: date
+) -> dict[str, Any]:
+    last = streaks.month_end(month)
+    return {
+        "name": habit.name,
+        "every": habit.every,
+        "target": habit.target,
+        "archived": habit.archived,
+        "periods_total": rate.periods_total,
+        "periods_met": rate.periods_met,
+        "completion_rate": None if rate.rate is None else round(rate.rate, 4),
+        "total_completions": sum(c for d, c in counts.items() if month <= d <= last),
+        "days": {d.isoformat(): counts[d] for d in sorted(counts) if month <= d <= last},
+    }
+
+
+def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    month = args.month or today.replace(day=1)
+    if month > today:
+        raise HabitlogError(
+            f"{month.strftime('%Y-%m')} is in the future (today is {today.isoformat()})"
+        )
+    if args.name:
+        habits = [db.get_habit(conn, args.name)]
+    else:
+        habits = db.list_habits(conn, include_archived=args.all)
+    data = []
+    for h in habits:
+        counts = db.completion_counts(conn, h)
+        data.append((h, counts, _month_rate(h, counts, month, today)))
+
+    if args.json:
+        payload = {
+            "month": month.strftime("%Y-%m"),
+            "habits": [_month_json(h, c, r, month) for h, c, r in data],
+        }
+        _print_json(payload)
+        return EXIT_OK
+
+    use_ascii = args.ascii or not can_encode("".join(heatmap.UNICODE_CHARS))
+    title = heatmap.month_title(month)
+    if args.name:
+        h, counts, rate = data[0]
+        print(f"{h.name}  {title}  ({h.every}, target {h.target}"
+              + (", archived)" if h.archived else ")"))
+        print(f"  {_rate_text(rate, h.every)}")
+        print()
+        weekly = h.every == "weekly"
+        grid = heatmap.month_grid(
+            counts, 1 if weekly else h.target, month, today, ascii=use_ascii,
+            week_target=h.target if weekly else None,
+        )
+        for line in grid:
+            print(line)
+        return EXIT_OK
+
+    if not data:
+        print("No habits yet. Add one with: habitlog add NAME")
+        return EXIT_OK
+    names = [h.name + (" (archived)" if h.archived else "") for h, _, _ in data]
+    width = max(len(title), *(len(n) for n in names)) + 2
+    tens, units = heatmap.month_day_header(month)
+    print(title.ljust(width) + tens)
+    print(" " * width + units)
+    for name, (h, counts, rate) in zip(names, data):
+        strip = heatmap.month_strip(
+            counts, 1 if h.every == "weekly" else h.target, month, today, ascii=use_ascii
+        )
+        print(f"{name.ljust(width)}{strip}  {_rate_text(rate, h.every)}")
+    print(heatmap.legend(use_ascii))
+    return EXIT_OK
+
+
 def cmd_export(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
     data = db.export_data(conn)
     out: TextIO
@@ -455,6 +550,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--since", type=_date_arg, metavar="DATE", help="only entries on or after DATE")
     p.add_argument("--json", action="store_true")
+
+    p = add("month", cmd_month, "a month calendar for one habit, or an overview of all habits")
+    p.add_argument("name", nargs="?", help="habit to show (default: one row per habit)")
+    p.add_argument(
+        "--month", type=_month_arg, metavar="YYYY-MM", help="month to show (default: this month)"
+    )
+    p.add_argument("--all", action="store_true", help="include archived habits in the overview")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--ascii", action="store_true", help="plain ASCII shading")
 
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")

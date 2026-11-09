@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Mapping
 
-from .streaks import week_start
+from .streaks import month_end, week_start
 
 UNICODE_CHARS = ("·", "░", "▓", "█")  # · ░ ▓ █
 ASCII_CHARS = (".", "-", "+", "#")
@@ -74,3 +74,78 @@ def render(
 def legend(ascii: bool = False) -> str:
     c = ASCII_CHARS if ascii else UNICODE_CHARS
     return f"{c[0]} none  {c[1]} some  {c[2]} half+  {c[3]} target met"
+
+
+FULL_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)  # locale-independent
+
+
+def month_title(month: date) -> str:
+    return f"{FULL_MONTH_NAMES[month.month - 1]} {month.year}"
+
+
+def _day_char(counts: Mapping[date, int], target: int, d: date, today: date, chars: tuple) -> str:
+    return " " if d > today else chars[level(counts.get(d, 0), target)]
+
+
+def month_grid(
+    counts: Mapping[date, int],
+    target: int,
+    month: date,
+    today: date,
+    ascii: bool = False,
+    week_target: int | None = None,
+) -> list[str]:
+    """A ``cal``-style grid of one month (weeks start on Monday).
+
+    Each day shows its number followed by its shade (``target`` is the per-day
+    target); days after ``today`` show only the number. With ``week_target``
+    (weekly habits), each row ends with that ISO week's total, e.g. ``2/3``;
+    the total covers the whole Monday-Sunday week, including days in the
+    neighbouring months, because that is the period the habit is judged on.
+    Returns the lines: weekday header, one row per week, legend.
+    """
+    chars = ASCII_CHARS if ascii else UNICODE_CHARS
+    first = month.replace(day=1)
+    last = month_end(first)
+    header = "".join(f" {name}" for name in DAY_NAMES)
+    if week_target is not None:
+        header += "  WEEK"
+    lines = [header]
+    monday = week_start(first)
+    while monday <= last:
+        cells = []
+        for i in range(7):
+            d = monday + timedelta(days=i)
+            if d.month != first.month or d.year != first.year:
+                cells.append("    ")
+            else:
+                cells.append(f"{d.day:>3}{_day_char(counts, target, d, today, chars)}")
+        row = "".join(cells)
+        if week_target is not None and monday <= today:
+            total = sum(counts.get(monday + timedelta(days=i), 0) for i in range(7))
+            row += f"  {total}/{week_target}"
+        lines.append(row.rstrip())
+        monday += timedelta(weeks=1)
+    lines.append(legend(ascii))
+    return lines
+
+
+def month_day_header(month: date) -> tuple[str, str]:
+    """Two header lines numbering the days of ``month`` (tens digit, then units)."""
+    days = range(1, month_end(month).day + 1)
+    tens = "".join(str(d // 10) if d % 10 == 0 else " " for d in days)
+    units = "".join(str(d % 10) for d in days)
+    return tens.rstrip(), units
+
+
+def month_strip(
+    counts: Mapping[date, int], target: int, month: date, today: date, ascii: bool = False
+) -> str:
+    """One character per day of ``month`` (blank after ``today``), for a one-line overview."""
+    chars = ASCII_CHARS if ascii else UNICODE_CHARS
+    first = month.replace(day=1)
+    days = (first + timedelta(days=i) for i in range(month_end(first).day))
+    return "".join(_day_char(counts, target, d, today, chars) for d in days)

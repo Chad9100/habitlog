@@ -31,6 +31,8 @@ scripted (`--json` output, JSON import/export).
   up in `stats` and travel with export/import.
 - `log`: every logged completion of a habit, newest first, with its count and
   note (`--since`, `--limit`, `--json`).
+- `month`: a calendar of one habit for a month, or a one-line-per-habit
+  overview of the month with how many periods were met (`--month YYYY-MM`).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -223,6 +225,95 @@ $ habitlog log Water --since 2026-11-08 --json
       "count": 3,
       "note": "before work",
       "logged_at": "2026-11-09T17:22:52"
+    }
+  ]
+}
+```
+
+### Month
+
+`habitlog month` shows the current month for all active habits, one row per
+habit and one character per day, followed by how many periods (days, weekdays
+or weeks) were met so far. `habitlog month NAME` shows a `cal`-style calendar
+of one habit instead. `--month YYYY-MM` picks another month (future months are
+rejected), `--all` adds archived habits to the overview and `--ascii` forces
+plain characters.
+
+Real output from a throwaway database with about five weeks of made-up,
+backfilled history (today was 2026-11-09, with 3 of 8 glasses of water logged):
+
+```
+$ habitlog month
+November 2026           1         2         3
+               123456789012345678901234567890
+Gym            ·█·█·█···                       2/2 weeks met (100%)
+Read 20 pages  ████████·                       8/8 days met (100%)
+Stretch        ·█████···                       5/5 weekdays met (100%)
+Water          ░███▓▓██░                       5/8 days met (62%)
+· none  ░ some  ▓ half+  █ target met
+
+$ habitlog month "Read 20 pages"
+Read 20 pages  November 2026  (daily, target 1)
+  8/8 days met (100%)
+
+ Mon Tue Wed Thu Fri Sat Sun
+                          1█
+  2█  3█  4█  5█  6█  7█  8█
+  9· 10  11  12  13  14  15
+ 16  17  18  19  20  21  22
+ 23  24  25  26  27  28  29
+ 30
+· none  ░ some  ▓ half+  █ target met
+```
+
+The rate uses the same rules as `stats`: it starts when the habit started,
+stops at today, and only counts today once it is met. Weekly habits are judged
+on whole ISO weeks, so every week that overlaps the month counts, and the
+calendar ends each row with that week's total (including days in the
+neighbouring months):
+
+```
+$ habitlog month Gym --month 2026-10 --ascii
+Gym  October 2026  (weekly, target 3)
+  3/5 weeks met (60%)
+
+ Mon Tue Wed Thu Fri Sat Sun  WEEK
+              1.  2#  3.  4.  1/3
+  5#  6.  7#  8.  9# 10. 11.  3/3
+ 12# 13. 14. 15. 16. 17. 18.  1/3
+ 19# 20. 21# 22. 23# 24. 25.  3/3
+ 26# 27. 28# 29. 30# 31.      3/3
+. none  - some  + half+  # target met
+
+$ habitlog month Water --month 2026-12
+habitlog: error: 2026-12 is in the future (today is 2026-11-09)
+```
+
+`month --json` returns `month` and a `habits` list; each entry has `name`,
+`every`, `target`, `archived`, `periods_total`, `periods_met`,
+`completion_rate` (0-1, or null), `total_completions` and `days` (date to
+count, for the days of that month):
+
+```
+$ habitlog month Stretch --month 2026-10 --json
+{
+  "month": "2026-10",
+  "habits": [
+    {
+      "name": "Stretch",
+      "every": "weekdays",
+      "target": 1,
+      "archived": false,
+      "periods_total": 22,
+      "periods_met": 21,
+      "completion_rate": 0.9545,
+      "total_completions": 21,
+      "days": {
+        "2026-10-01": 1,
+        "2026-10-02": 1,
+        "2026-10-05": 1,
+        ...
+      }
     }
   ]
 }
@@ -436,7 +527,7 @@ python -m venv .venv
 Layout:
 
 - `src/habitlog/streaks.py` pure date and streak logic (no I/O, `today` passed in)
-- `src/habitlog/heatmap.py` text heatmap rendering
+- `src/habitlog/heatmap.py` text heatmap and month calendar rendering
 - `src/habitlog/db.py` SQLite storage, migrations, import/export
 - `src/habitlog/cli.py` argparse commands
 - `tests/` pytest suite; every test uses a temporary database

@@ -543,6 +543,101 @@ def test_log_works_for_archived_habits(run):
 # --------------------------------------------------------------------------- db location / entry points
 
 
+# --------------------------------------------------------------------------- month
+
+
+def test_month_single_habit_grid(run):
+    run("add", "Read")
+    for d in ("2026-02-28", "2026-03-01", "2026-03-02", "2026-03-04"):
+        run("done", "Read", "--date", d)
+    r = run("month", "read", "--ascii")
+    assert r.code == 0
+    lines = r.out.splitlines()
+    assert lines[0] == "Read  March 2026  (daily, target 1)"
+    # Started 28 Feb, so March counts 1-4: 1st, 2nd and 4th met, 3rd missed.
+    assert lines[1] == "  3/4 days met (75%)"
+    assert lines[3] == " Mon Tue Wed Thu Fri Sat Sun"
+    assert lines[4] == "                          1#"
+    assert lines[5] == "  2#  3.  4#  5   6   7   8"
+    assert "target met" in lines[-1]
+
+
+def test_month_other_month_and_weekly_totals(run):
+    run("add", "Gym", "--every", "weekly", "--target", "2")
+    for d in ("2026-02-02", "2026-02-04", "2026-02-11", "2026-02-27", "2026-03-01"):
+        run("done", "Gym", "--date", d)
+    r = run("month", "Gym", "--month", "2026-02", "--ascii")
+    assert r.code == 0
+    lines = r.out.splitlines()
+    assert lines[0] == "Gym  February 2026  (weekly, target 2)"
+    # Weeks of Feb 2 (met), 9 (1/2), 16 (0/2), 23 (met thanks to Sunday 1 March).
+    assert lines[1] == "  2/4 weeks met (50%)"
+    assert lines[3].endswith("  WEEK")
+    assert lines[4].endswith("1.  0/2")  # Feb 1 is a Sunday in the week of Jan 26
+    assert lines[5].endswith("  2/2")
+    assert lines[8].endswith("  2/2")
+
+
+def test_month_overview_all_habits(run):
+    run("add", "Read")
+    run("add", "Water", "--target", "4")
+    run("add", "Old")
+    run("archive", "Old")
+    run("done", "Read", "--date", "2026-03-02")
+    run("done", "Water", "--date", "2026-03-03", "--count", "2")
+    r = run("month", "--ascii")
+    assert r.code == 0
+    lines = r.out.splitlines()
+    assert lines[0] == "March 2026           1         2         3"
+    assert lines[1] == " " * 12 + "1234567890123456789012345678901"
+    # Both habits were created on TODAY but backfilled, so they count from the first entry.
+    assert lines[2] == "Read        .#.." + " " * 27 + "  1/2 days met (50%)"
+    assert lines[3] == "Water       ..+." + " " * 27 + "  0/1 days met (0%)"
+    assert len(lines) == 5 and "target met" in lines[4]
+    assert "Old" not in r.out
+    assert "Old (archived)" in run("month", "--all", "--ascii").out
+
+
+def test_month_json(run):
+    run("add", "Read")
+    run("done", "Read", "--date", "2026-02-27")
+    run("done", "Read", "--date", "2026-03-02", "--count", "2")
+    data = run("month", "Read", "--json").json()
+    assert data["month"] == "2026-03"
+    [h] = data["habits"]
+    assert h == {
+        "name": "Read", "every": "daily", "target": 1, "archived": False,
+        "periods_total": 3, "periods_met": 1, "completion_rate": 0.3333,
+        "total_completions": 2, "days": {"2026-03-02": 2},
+    }
+    data = run("month", "--json", "--month", "2026-01").json()
+    assert data["habits"][0]["periods_total"] == 0
+    assert data["habits"][0]["completion_rate"] is None
+
+
+def test_month_no_habits(run):
+    r = run("month")
+    assert r.code == 0 and "No habits yet" in r.out
+    assert run("month", "--json").json() == {"month": "2026-03", "habits": []}
+
+
+def test_month_errors(run):
+    run("add", "Read")
+    r = run("month", "Read", "--month", "2026-04")
+    assert r.code == 1 and "2026-04 is in the future" in r.err
+    assert run("month", "Nope").code == 1
+    for bad in ("2026-13", "2026-3", "March"):
+        assert run("month", "--month", bad).code == 2
+
+
+def test_month_unicode_shading(run):
+    run("add", "Read")
+    run("done", "Read", "--date", "2026-03-02")
+    r = run("month", "Read")
+    # pytest's capture stream is UTF-8, so block characters are used.
+    assert "  2█" in r.out
+
+
 def test_db_option_after_subcommand(tmp_path, capsys):
     path = tmp_path / "late.db"
     assert cli.main(["add", "Read", "--db", str(path)], today=TODAY) == 0
