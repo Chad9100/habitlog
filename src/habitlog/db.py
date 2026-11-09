@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -13,10 +14,11 @@ from typing import Any, Callable, Iterator, Mapping
 
 from .streaks import FREQUENCIES, parse_date
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXPORT_FORMAT = "habitlog-export"
 EXPORT_VERSION = 1
 MAX_NAME_LENGTH = 100
+MAX_NOTE_LENGTH = 500
 
 
 class HabitlogError(Exception):
@@ -109,8 +111,16 @@ def _migrate_to_1(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX idx_completions_habit_day ON completions (habit_id, day)")
 
 
+def _migrate_to_2(conn: sqlite3.Connection) -> None:
+    # An optional free-text note per completion row (``done --note``).
+    conn.execute("ALTER TABLE completions ADD COLUMN note TEXT")
+
+
 # Migration N upgrades a database from schema version N - 1 to N.
-MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {1: _migrate_to_1}
+MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    1: _migrate_to_1,
+    2: _migrate_to_2,
+}
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -176,6 +186,16 @@ def clean_name(name: str) -> str:
         raise HabitlogError("habit name must not be empty")
     if len(cleaned) > MAX_NAME_LENGTH:
         raise HabitlogError(f"habit name is longer than {MAX_NAME_LENGTH} characters")
+    return cleaned
+
+
+def clean_note(note: str) -> str:
+    """Notes are single-line: runs of whitespace (including newlines) become one space."""
+    cleaned = " ".join(note.split())
+    if not cleaned:
+        raise HabitlogError("note must not be empty")
+    if len(cleaned) > MAX_NOTE_LENGTH:
+        raise HabitlogError(f"note is longer than {MAX_NOTE_LENGTH} characters")
     return cleaned
 
 
@@ -257,13 +277,17 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def add_completion(conn: sqlite3.Connection, habit: Habit, day: date, count: int = 1) -> None:
+def add_completion(
+    conn: sqlite3.Connection, habit: Habit, day: date, count: int = 1, note: str | None = None
+) -> None:
     if count < 1:
         raise HabitlogError("count must be at least 1")
+    if note is not None:
+        note = clean_note(note)
     with transaction(conn):
         conn.execute(
-            "INSERT INTO completions (habit_id, day, count, logged_at) VALUES (?, ?, ?, ?)",
-            (habit.id, day.isoformat(), count, _now()),
+            "INSERT INTO completions (habit_id, day, count, logged_at, note) VALUES (?, ?, ?, ?, ?)",
+            (habit.id, day.isoformat(), count, _now(), note),
         )
 
 
@@ -289,6 +313,23 @@ def completion_counts(conn: sqlite3.Connection, habit: Habit) -> dict[date, int]
     return {date.fromisoformat(r["day"]): int(r["total"]) for r in rows}
 
 
+def completion_notes(
+    conn: sqlite3.Connection, habit: Habit, start: date | None = None, end: date | None = None
+) -> list[tuple[date, str]]:
+    """``(day, note)`` for completions that have a note, oldest first, optionally
+    limited to ``start <= day <= end``."""
+    sql = "SELECT day, note FROM completions WHERE habit_id = ? AND note IS NOT NULL"
+    params: list[Any] = [habit.id]
+    if start is not None:
+        sql += " AND day >= ?"
+        params.append(start.isoformat())
+    if end is not None:
+        sql += " AND day <= ?"
+        params.append(end.isoformat())
+    sql += " ORDER BY day, id"
+    return [(date.fromisoformat(r["day"]), r["note"]) for r in conn.execute(sql, params)]
+
+
 # --------------------------------------------------------------------------- export / import
 
 
@@ -296,6 +337,15 @@ def export_data(conn: sqlite3.Connection) -> dict[str, Any]:
     habits = []
     for h in list_habits(conn, include_archived=True):
         counts = completion_counts(conn, h)
+        notes: dict[date, list[str]] = {}
+        for d, note in completion_notes(conn, h):
+            notes.setdefault(d, []).append(note)
+        completions = []
+        for d in sorted(counts):
+            entry: dict[str, Any] = {"date": d.isoformat(), "count": counts[d]}
+            if d in notes:
+                entry["notes"] = notes[d]
+            completions.append(entry)
         habits.append(
             {
                 "name": h.name,
@@ -303,9 +353,7 @@ def export_data(conn: sqlite3.Connection) -> dict[str, Any]:
                 "target": h.target,
                 "archived": h.archived,
                 "created": h.created.isoformat(),
-                "completions": [
-                    {"date": d.isoformat(), "count": counts[d]} for d in sorted(counts)
-                ],
+                "completions": completions,
             }
         )
     return {"format": EXPORT_FORMAT, "version": EXPORT_VERSION, "habits": habits}
@@ -316,6 +364,8 @@ class ImportResult:
     habits_created: int
     habits_existing: int
     completions_added: int
+    notes_added: int = 0
+    notes_skipped: int = 0
 
 
 def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
@@ -350,6 +400,7 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
         if not isinstance(completions_raw, list):
             raise HabitlogError(f"{where}: completions must be a list")
         counts: dict[date, int] = {}
+        notes: dict[date, list[str]] = {}
         for j, c in enumerate(completions_raw):
             cwhere = f"{where}.completions[{j}]"
             if not isinstance(c, dict):
@@ -364,6 +415,15 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
             if not isinstance(n, int) or isinstance(n, bool) or n < 1:
                 raise HabitlogError(f"{cwhere}: count must be a positive integer")
             counts[d] = counts.get(d, 0) + n
+            notes_raw = c.get("notes", [])
+            if not isinstance(notes_raw, list) or not all(isinstance(x, str) for x in notes_raw):
+                raise HabitlogError(f"{cwhere}: notes must be a list of strings")
+            if len(notes_raw) > n:
+                raise HabitlogError(f"{cwhere}: more notes than the count ({n})")
+            try:
+                notes.setdefault(d, []).extend(clean_note(x) for x in notes_raw)
+            except HabitlogError as exc:
+                raise HabitlogError(f"{cwhere}: {exc}") from None
         created_raw = raw.get("created")
         if created_raw is None:
             created = min(counts) if counts else today
@@ -380,6 +440,7 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
                 "archived": archived,
                 "created": created,
                 "counts": counts,
+                "notes": notes,
             }
         )
     return habits
@@ -391,9 +452,15 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
     Habits are matched by case-insensitive name; existing habits keep their own
     settings. For every day, completions are only added up to the imported
     total, so importing the same file twice changes nothing the second time.
+
+    Notes merge the same way: an imported note the day doesn't already have is
+    attached to one of that day's completions that has no note (existing ones
+    first, then the ones this import adds). A note that finds no free
+    completion (the day is fully logged and every completion already has a
+    different note) is left out and counted in ``notes_skipped``.
     """
     habits = _validate_import(data, today)
-    created = existing = added = 0
+    created = existing = added = notes_added = notes_skipped = 0
     with transaction(conn):
         for h in habits:
             row = conn.execute(
@@ -425,11 +492,44 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
                 )
             }
             for d, n in sorted(h["counts"].items()):
-                missing = n - have.get(d.isoformat(), 0)
+                day = d.isoformat()
+                rows = conn.execute(
+                    "SELECT id, note FROM completions WHERE habit_id = ? AND day = ? ORDER BY id",
+                    (habit_id, day),
+                ).fetchall()
+                pending = Counter(h["notes"].get(d, [])) - Counter(r["note"] for r in rows)
+                new_notes = []
+                for note in h["notes"].get(d, []):  # keep the imported order
+                    if pending[note] > 0:
+                        pending[note] -= 1
+                        new_notes.append(note)
+                for r in rows:
+                    if not new_notes:
+                        break
+                    if r["note"] is None:
+                        conn.execute(
+                            "UPDATE completions SET note = ? WHERE id = ?",
+                            (new_notes.pop(0), r["id"]),
+                        )
+                        notes_added += 1
+                missing = n - have.get(day, 0)
                 if missing > 0:
-                    conn.execute(
-                        "INSERT INTO completions (habit_id, day, count, logged_at) VALUES (?, ?, ?, ?)",
-                        (habit_id, d.isoformat(), missing, _now()),
-                    )
                     added += missing
-    return ImportResult(created, existing, added)
+                    # One row per remaining note (count 1 each; the last row takes the rest).
+                    k = min(len(new_notes), missing)
+                    chunks: list[tuple[int, str | None]] = [
+                        (1, new_notes.pop(0)) for _ in range(k - 1)
+                    ]
+                    if k:
+                        chunks.append((missing - (k - 1), new_notes.pop(0)))
+                    else:
+                        chunks.append((missing, None))
+                    for count, note in chunks:
+                        conn.execute(
+                            "INSERT INTO completions (habit_id, day, count, logged_at, note) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (habit_id, day, count, _now(), note),
+                        )
+                        notes_added += note is not None
+                notes_skipped += len(new_notes)
+    return ImportResult(created, existing, added, notes_added, notes_skipped)

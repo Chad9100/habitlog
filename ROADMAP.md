@@ -15,7 +15,7 @@ Estimates are rough working hours for one person, including tests and docs.
 
 ## v0.2 - Notes and better views (about 8 h)
 
-- [ ] Notes per completion: `habitlog done read --note "chapter 4"`, shown in
+- [x] Notes per completion: `habitlog done read --note "chapter 4"`, shown in
       `stats` and included in export/import (schema migration 2) - 3 h
 - [ ] `habitlog log NAME` to list recent completions with dates, counts and notes - 1.5 h
 - [ ] Monthly calendar view: `habitlog month [NAME] [--month 2026-11]` - 2.5 h

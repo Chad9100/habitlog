@@ -27,6 +27,8 @@ scripted (`--json` output, JSON import/export).
 - Current and longest streaks. Today (or this week) is still open, so the
   current streak doesn't drop to zero just because you haven't done it *yet*.
 - Backfill with `--date`, log several at once with `--count`, `undo` mistakes.
+- Attach a short note to a completion (`--note "chapter 4"`); recent notes show
+  up in `stats` and travel with export/import.
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -88,6 +90,71 @@ Removed the last completion of 'Stretch' on 2026-11-09 (-1, 0 left that day).
 
 $ habitlog done "Read 20 pages" --date 2099-01-01
 habitlog: error: 2099-01-01 is in the future (today is 2026-11-09)
+```
+
+### Notes
+
+`done --note TEXT` attaches a short, single-line note (up to 500 characters;
+newlines and runs of spaces collapse to one space) to that completion. `undo`
+removes the most recent completion together with its note. `stats` lists the
+most recent notes in its window, newest first; `--notes N` changes how many
+(default 5, `--notes 0` hides them).
+
+Real output from a separate throwaway database (one habit, about two weeks of
+backfilled reading):
+
+```
+$ habitlog done "Read 20 pages" --date 2026-11-08 --note "Dune, ch. 4 - finally met Stilgar"
+Logged 'Read 20 pages' on 2026-11-08 (1 that day) with a note. Current streak: 13 days.
+
+$ habitlog done "Read 20 pages" --note "   "
+habitlog: error: note must not be empty
+
+$ habitlog stats "Read 20 pages" --weeks 3 --ascii
+Read 20 pages  (daily, target 1)
+  Last 3 weeks: 13/13 days met (100.0%)
+  Current streak: 13 days
+  Longest streak: 13 days
+  Total completions: 14
+
+    Oct
+Mon . # .
+Tue # #
+Wed # #
+Thu # #
+Fri # #
+Sat # #
+Sun # #
+. none  - some  + half+  # target met
+
+Recent notes:
+  2026-11-08  Dune, ch. 4 - finally met Stilgar
+  2026-11-06  Dune, ch. 3, on the train
+  2026-11-03  Dune, ch. 1-2
+
+$ habitlog stats "Read 20 pages" --weeks 3 --notes 1
+...
+Recent notes (2 older in this window):
+  2026-11-08  Dune, ch. 4 - finally met Stilgar
+```
+
+`stats --json` returns every note in the window, oldest first:
+
+```
+  "notes": [
+    {
+      "date": "2026-11-03",
+      "note": "Dune, ch. 1-2"
+    },
+    {
+      "date": "2026-11-06",
+      "note": "Dune, ch. 3, on the train"
+    },
+    {
+      "date": "2026-11-08",
+      "note": "Dune, ch. 4 - finally met Stilgar"
+    }
+  ]
 ```
 
 ### List
@@ -201,8 +268,9 @@ $ habitlog list --json
 `today.status` is one of `done`, `partial`, `open` or `rest`. `stats --json`
 returns `name`, `every`, `target`, `archived`, `weeks`, `window_start`,
 `window_end`, `periods_total`, `periods_met`, `completion_rate` (0-1, or null),
-`current_streak`, `longest_streak`, `streak_unit`, `total_completions` and
-`days` (date to count, for the days in the window).
+`current_streak`, `longest_streak`, `streak_unit`, `total_completions`,
+`days` (date to count, for the days in the window) and `notes` (a list of
+`{"date", "note"}` for the window, oldest first).
 
 ### Managing habits
 
@@ -221,11 +289,6 @@ habitlog: error: refusing to delete 'Guitar' and all its history without --yes (
 ### Export and import
 
 ```
-$ habitlog export --format csv | head -3
-habit,every,target,archived,date,count
-Guitar,daily,1,true,2026-08-31,1
-Guitar,daily,1,true,2026-09-02,1
-
 $ habitlog export -o backup.json
 Exported 5 habits to backup.json.
 
@@ -233,11 +296,38 @@ $ habitlog import backup.json
 Imported: 0 new habits, 5 already present, 0 completions added.
 ```
 
+The CSV export has one row per habit and day, with the day's notes joined by
+` | ` in the last column (from the notes demo database above):
+
+```
+$ habitlog export --format csv
+habit,every,target,archived,date,count,notes
+...
+Read 20 pages,daily,1,false,2026-11-02,1,
+Read 20 pages,daily,1,false,2026-11-03,1,"Dune, ch. 1-2"
+Read 20 pages,daily,1,false,2026-11-04,1,
+Read 20 pages,daily,1,false,2026-11-05,1,
+Read 20 pages,daily,1,false,2026-11-06,2,"Dune, ch. 3, on the train"
+...
+```
+
 The JSON export holds every habit (including archived ones) with its settings
-and per-day completion counts. `import` matches habits by name
-(case-insensitively), creates the missing ones and only adds completions up to
-the imported per-day count, so running it again changes nothing. Existing
-habits keep their own settings.
+and per-day completion counts; a day with notes also has a `notes` list
+(`{"date": "2026-11-03", "count": 1, "notes": ["Dune, ch. 1-2"]}`). `import`
+matches habits by name (case-insensitively), creates the missing ones and only
+adds completions up to the imported per-day count, so running it again changes
+nothing. Existing habits keep their own settings.
+
+Notes merge the same way. An imported note that the day doesn't have yet is
+put on one of that day's completions without a note; if every completion that
+day already has a different note, it is skipped and reported, never duplicated:
+
+```
+$ habitlog --db fresh.db import backup.json
+Imported: 1 new habit, 0 already present, 14 completions added, 3 notes added.
+$ habitlog --db fresh.db import backup.json
+Imported: 0 new habits, 1 already present, 0 completions added.
+```
 
 ### Exit codes
 

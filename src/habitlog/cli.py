@@ -38,6 +38,16 @@ def _positive_int(text: str) -> int:
     return value
 
 
+def _nonnegative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be at least 0, got {value}")
+    return value
+
+
 def _check_not_future(day: date, today: date) -> None:
     if day > today:
         raise HabitlogError(f"{day.isoformat()} is in the future (today is {today.isoformat()})")
@@ -161,13 +171,14 @@ def cmd_done(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
     habit = db.get_habit(conn, args.name)
     if habit.archived:
         raise HabitlogError(f"'{habit.name}' is archived; unarchive it first")
-    db.add_completion(conn, habit, day, args.count)
+    db.add_completion(conn, habit, day, args.count, args.note)
     counts = db.completion_counts(conn, habit)
     streak = streaks.current_streak(counts, habit.every, habit.target, today)
     unit = streaks.streak_unit(habit.every)
     print(
         f"Logged '{habit.name}' on {day.isoformat()} "
-        f"({counts[day]} that day). Current streak: {_plural(streak, unit)}."
+        f"({counts[day]} that day){' with a note' if args.note is not None else ''}. "
+        f"Current streak: {_plural(streak, unit)}."
     )
     return EXIT_OK
 
@@ -223,6 +234,7 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     unit = streaks.streak_unit(habit.every)
     window_start = streaks.week_start(today) - streaks.ONE_WEEK * (args.weeks - 1)
     in_window = {d: c for d, c in counts.items() if window_start <= d <= today}
+    notes = db.completion_notes(conn, habit, window_start, today)
 
     if args.json:
         _print_json(
@@ -242,6 +254,7 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
                 "streak_unit": unit,
                 "total_completions": sum(counts.values()),
                 "days": {d.isoformat(): in_window[d] for d in sorted(in_window)},
+                "notes": [{"date": d.isoformat(), "note": n} for d, n in notes],
             }
         )
         return EXIT_OK
@@ -264,6 +277,13 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     day_target = 1 if habit.every == "weekly" else habit.target
     for line in heatmap.render(counts, day_target, today, args.weeks, ascii=use_ascii):
         print(line)
+    shown = notes[-args.notes:] if args.notes else []
+    if shown:
+        more = len(notes) - len(shown)
+        print()
+        print("Recent notes" + (f" ({more} older in this window)" if more else "") + ":")
+        for d, note in reversed(shown):
+            print(f"  {d.isoformat()}  {note}")
     return EXIT_OK
 
 
@@ -279,13 +299,13 @@ def cmd_export(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
             out.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
         else:
             writer = csv.writer(out, lineterminator="\n")
-            writer.writerow(["habit", "every", "target", "archived", "date", "count"])
+            writer.writerow(["habit", "every", "target", "archived", "date", "count", "notes"])
             for h in data["habits"]:
                 base = [h["name"], h["every"], h["target"], str(h["archived"]).lower()]
                 if not h["completions"]:
-                    writer.writerow(base + ["", ""])
+                    writer.writerow(base + ["", "", ""])
                 for c in h["completions"]:
-                    writer.writerow(base + [c["date"], c["count"]])
+                    writer.writerow(base + [c["date"], c["count"], " | ".join(c.get("notes", []))])
     finally:
         if out is not sys.stdout:
             out.close()
@@ -310,7 +330,14 @@ def cmd_import(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
     print(
         f"Imported: {_plural(result.habits_created, 'new habit')}, "
         f"{result.habits_existing} already present, "
-        f"{_plural(result.completions_added, 'completion')} added."
+        f"{_plural(result.completions_added, 'completion')} added"
+        + (f", {_plural(result.notes_added, 'note')} added" if result.notes_added else "")
+        + (
+            f", {_plural(result.notes_skipped, 'note')} skipped (no free completion that day)"
+            if result.notes_skipped
+            else ""
+        )
+        + "."
     )
     return EXIT_OK
 
@@ -358,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--date", type=_date_arg, help="YYYY-MM-DD (default: today)")
     p.add_argument("--count", type=_positive_int, default=1)
+    p.add_argument("--note", help="attach a short note to this completion")
 
     p = add("undo", cmd_undo, "remove the most recent completion for a date")
     p.add_argument("name")
@@ -372,6 +400,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--weeks", type=_positive_int, default=12)
     p.add_argument("--json", action="store_true")
     p.add_argument("--ascii", action="store_true", help="plain ASCII heatmap")
+    p.add_argument(
+        "--notes", type=_nonnegative_int, default=5, metavar="N",
+        help="show the N most recent notes in the window (default 5, 0 hides them)",
+    )
 
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")

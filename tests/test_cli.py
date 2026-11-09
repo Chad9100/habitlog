@@ -233,7 +233,7 @@ def test_stats_json_shape(run):
     assert set(s) == {
         "name", "every", "target", "archived", "weeks", "window_start", "window_end",
         "periods_total", "periods_met", "completion_rate", "current_streak",
-        "longest_streak", "streak_unit", "total_completions", "days",
+        "longest_streak", "streak_unit", "total_completions", "days", "notes",
     }
     # Window starts at the first completion (habit created "today" but backfilled).
     assert s["window_start"] == "2026-02-25" and s["window_end"] == "2026-03-04"
@@ -241,6 +241,7 @@ def test_stats_json_shape(run):
     assert s["completion_rate"] == round(6 / 7, 4)
     assert (s["current_streak"], s["longest_streak"]) == (3, 3)
     assert s["days"]["2026-03-01"] == 1 and len(s["days"]) == 6
+    assert s["notes"] == []
 
 
 def test_stats_text_with_ascii_heatmap(run):
@@ -305,9 +306,9 @@ def test_export_csv(run):
     _seed(run)
     run("add", "Empty")
     rows = list(csv.reader(io.StringIO(run("export", "--format", "csv").out)))
-    assert rows[0] == ["habit", "every", "target", "archived", "date", "count"]
-    assert ["Empty", "daily", "1", "false", "", ""] in rows
-    assert ["Read", "daily", "1", "false", "2026-03-03", "1"] in rows
+    assert rows[0] == ["habit", "every", "target", "archived", "date", "count", "notes"]
+    assert ["Empty", "daily", "1", "false", "", "", ""] in rows
+    assert ["Read", "daily", "1", "false", "2026-03-03", "1", ""] in rows
     assert len(rows) == 1 + 1 + 6
 
 
@@ -380,6 +381,88 @@ def test_import_rejects_bad_files(run, tmp_path, content, message):
 def test_import_missing_file(run, tmp_path):
     r = run("import", str(tmp_path / "missing.json"))
     assert r.code == 1 and "cannot read" in r.err
+
+
+# --------------------------------------------------------------------------- notes
+
+
+def test_done_with_note_shows_in_stats(run):
+    run("add", "Read")
+    r = run("done", "Read", "--date", "2026-03-02", "--note", "chapter 4")
+    assert r.code == 0 and "with a note" in r.out
+    run("done", "Read", "--date", "2026-03-03")
+    run("done", "Read", "--note", "chapter 5")
+    out = run("stats", "Read", "--weeks", "2", "--ascii").out
+    lines = out.splitlines()
+    i = lines.index("Recent notes:")
+    assert lines[i + 1:] == ["  2026-03-04  chapter 5", "  2026-03-02  chapter 4"]
+    s = run("stats", "Read", "--weeks", "2", "--json").json()
+    assert s["notes"] == [
+        {"date": "2026-03-02", "note": "chapter 4"},
+        {"date": "2026-03-04", "note": "chapter 5"},
+    ]
+
+
+def test_done_without_note_says_nothing_about_notes(run):
+    run("add", "Read")
+    out = run("done", "Read").out
+    assert "note" not in out
+    assert "Recent notes" not in run("stats", "Read", "--ascii").out
+
+
+def test_stats_notes_limit_and_window(run):
+    run("add", "Read")
+    run("done", "Read", "--date", "2026-01-05", "--note", "old")
+    for day in ("01", "02", "03", "04"):
+        run("done", "Read", "--date", f"2026-03-{day}", "--note", f"n{day}")
+    out = run("stats", "Read", "--weeks", "2", "--notes", "2", "--ascii").out
+    tail = out.splitlines()[-3:]
+    assert tail == ["Recent notes (2 older in this window):", "  2026-03-04  n04", "  2026-03-03  n03"]
+    assert "Recent notes" not in run("stats", "Read", "--notes", "0", "--ascii").out
+    assert run("stats", "Read", "--notes", "-1").code == 2
+    notes = run("stats", "Read", "--weeks", "2", "--json").json()["notes"]
+    assert [n["note"] for n in notes] == ["n01", "n02", "n03", "n04"]
+
+
+def test_done_empty_note_fails_without_logging(run):
+    run("add", "Read")
+    r = run("done", "Read", "--note", "  ")
+    assert r.code == 1 and "note must not be empty" in r.err
+    assert run("export").json()["habits"][0]["completions"] == []
+
+
+def test_notes_in_export_and_round_trip(run, tmp_path, capsys):
+    run("add", "Water", "--target", "8")
+    run("done", "Water", "--count", "3", "--note", "morning")
+    run("done", "Water", "--count", "2")
+    run("done", "Water", "--note", "after run")
+    data = run("export").json()
+    assert data["habits"][0]["completions"] == [
+        {"date": "2026-03-04", "count": 6, "notes": ["morning", "after run"]}
+    ]
+    rows = list(csv.reader(io.StringIO(run("export", "--format", "csv").out)))
+    assert rows[1][-2:] == ["6", "morning | after run"]
+
+    out = tmp_path / "notes.json"
+    run("export", "-o", str(out))
+    other = tmp_path / "other.db"
+    assert cli.main(["--db", str(other), "import", str(out)], today=TODAY) == 0
+    assert "2 notes added" in capsys.readouterr().out
+    cli.main(["--db", str(other), "import", str(out)], today=TODAY)
+    assert "notes" not in capsys.readouterr().out  # second import adds nothing
+    cli.main(["--db", str(other), "export"], today=TODAY)
+    assert json.loads(capsys.readouterr().out) == data
+
+
+def test_import_reports_skipped_notes(run, tmp_path):
+    run("add", "Read")
+    run("done", "Read", "--note", "mine")
+    f = tmp_path / "in.json"
+    f.write_text(json.dumps({"habits": [{"name": "Read", "completions": [
+        {"date": "2026-03-04", "count": 1, "notes": ["theirs"]},
+    ]}]}), encoding="utf-8")
+    r = run("import", str(f))
+    assert r.code == 0 and "1 note skipped (no free completion that day)" in r.out
 
 
 # --------------------------------------------------------------------------- db location / entry points
