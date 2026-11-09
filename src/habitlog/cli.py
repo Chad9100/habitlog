@@ -16,6 +16,7 @@ from .db import Habit, HabitlogError
 
 EXIT_OK = 0
 EXIT_ERROR = 1  # usage errors detected by argparse exit with 2
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # locale-independent
 
 
 # --------------------------------------------------------------------------- helpers
@@ -53,8 +54,8 @@ def _check_not_future(day: date, today: date) -> None:
         raise HabitlogError(f"{day.isoformat()} is in the future (today is {today.isoformat()})")
 
 
-def _plural(n: int, unit: str) -> str:
-    return f"{n} {unit}" if n == 1 else f"{n} {unit}s"
+def _plural(n: int, unit: str, plural: str | None = None) -> str:
+    return f"{n} {unit}" if n == 1 else f"{n} {plural or unit + 's'}"
 
 
 def can_encode(text: str, stream: TextIO | None = None) -> bool:
@@ -287,6 +288,47 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     return EXIT_OK
 
 
+def cmd_log(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    habit = db.get_habit(conn, args.name)
+    entries, total = db.completion_log(conn, habit, since=args.since, limit=args.limit or None)
+    if args.json:
+        _print_json(
+            {
+                "name": habit.name,
+                "since": args.since.isoformat() if args.since else None,
+                "total": total,
+                "entries": [
+                    {
+                        "date": e.day.isoformat(),
+                        "count": e.count,
+                        "note": e.note,
+                        "logged_at": e.logged_at,
+                    }
+                    for e in entries
+                ],
+            }
+        )
+        return EXIT_OK
+    since_text = f" since {args.since.isoformat()}" if args.since else ""
+    if not entries:
+        print(f"No completions of '{habit.name}' logged{since_text}.")
+        return EXIT_OK
+    header = f"{habit.name}: {_plural(total, 'entry', 'entries')}{since_text}"
+    if len(entries) < total:
+        header += f", newest {len(entries)} shown"
+    print(header)
+    rows = [["DATE", "DAY", "COUNT", "NOTE"]]
+    for e in entries:
+        rows.append([e.day.isoformat(), _WEEKDAYS[e.day.weekday()], str(e.count), e.note or ""])
+    for line in _table(rows):
+        print(line)
+    hidden = total - len(entries)
+    if hidden:
+        print(f"({_plural(hidden, 'older entry', 'older entries')} not shown; "
+              "--limit 0 shows all)")
+    return EXIT_OK
+
+
 def cmd_export(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
     data = db.export_data(conn)
     out: TextIO
@@ -404,6 +446,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--notes", type=_nonnegative_int, default=5, metavar="N",
         help="show the N most recent notes in the window (default 5, 0 hides them)",
     )
+
+    p = add("log", cmd_log, "list a habit's logged completions, newest first")
+    p.add_argument("name")
+    p.add_argument(
+        "--limit", type=_nonnegative_int, default=20, metavar="N",
+        help="show at most N entries (default 20, 0 shows all)",
+    )
+    p.add_argument("--since", type=_date_arg, metavar="DATE", help="only entries on or after DATE")
+    p.add_argument("--json", action="store_true")
 
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")

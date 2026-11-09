@@ -29,6 +29,8 @@ scripted (`--json` output, JSON import/export).
 - Backfill with `--date`, log several at once with `--count`, `undo` mistakes.
 - Attach a short note to a completion (`--note "chapter 4"`); recent notes show
   up in `stats` and travel with export/import.
+- `log`: every logged completion of a habit, newest first, with its count and
+  note (`--since`, `--limit`, `--json`).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -155,6 +157,75 @@ Recent notes (2 older in this window):
       "note": "Dune, ch. 4 - finally met Stilgar"
     }
   ]
+```
+
+### Log
+
+`habitlog log NAME` lists what you actually logged for one habit: one row per
+`done`, newest first, with the day, its count and its note. It shows the 20
+newest entries by default; `--limit N` changes that (`--limit 0` shows all) and
+`--since YYYY-MM-DD` keeps only entries on or after that date. Archived habits
+can be logged too, so their history stays readable.
+
+Real output from a throwaway database (backfilled reading over two weeks, plus
+one day of water):
+
+```
+$ habitlog log "Read 20 pages" --limit 6
+Read 20 pages: 12 entries, newest 6 shown
+DATE        DAY  COUNT  NOTE
+2026-11-08  Sun  1      Dune, ch. 4 - finally met Stilgar
+2026-11-06  Fri  1
+2026-11-06  Fri  1      Dune, ch. 3, on the train
+2026-11-05  Thu  1
+2026-11-04  Wed  1
+2026-11-03  Tue  1      Dune, ch. 1-2
+(6 older entries not shown; --limit 0 shows all)
+
+$ habitlog log "Read 20 pages" --since 2026-11-05
+Read 20 pages: 4 entries since 2026-11-05
+DATE        DAY  COUNT  NOTE
+2026-11-08  Sun  1      Dune, ch. 4 - finally met Stilgar
+2026-11-06  Fri  1
+2026-11-06  Fri  1      Dune, ch. 3, on the train
+2026-11-05  Thu  1
+
+$ habitlog log Water --since 2026-11-09
+No completions of 'Water' logged since 2026-11-09.
+```
+
+`log --json` returns `name`, `since` (or null), `total` (matching entries,
+ignoring `--limit`) and `entries`, newest first. `logged_at` is the local time
+on the computer when the entry was recorded, which differs from `date` for
+backfilled entries:
+
+```
+$ habitlog log Water --since 2026-11-08 --json
+{
+  "name": "Water",
+  "since": "2026-11-08",
+  "total": 3,
+  "entries": [
+    {
+      "date": "2026-11-08",
+      "count": 1,
+      "note": "after the run",
+      "logged_at": "2026-11-09T17:22:53"
+    },
+    {
+      "date": "2026-11-08",
+      "count": 4,
+      "note": null,
+      "logged_at": "2026-11-09T17:22:53"
+    },
+    {
+      "date": "2026-11-08",
+      "count": 3,
+      "note": "before work",
+      "logged_at": "2026-11-09T17:22:52"
+    }
+  ]
+}
 ```
 
 ### List

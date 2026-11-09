@@ -465,6 +465,81 @@ def test_import_reports_skipped_notes(run, tmp_path):
     assert r.code == 0 and "1 note skipped (no free completion that day)" in r.out
 
 
+# --------------------------------------------------------------------------- log
+
+
+def test_log_lists_entries_newest_first_with_notes(run):
+    run("add", "Read")
+    run("done", "Read", "--date", "2026-03-01", "--note", "chapter 1")
+    run("done", "Read", "--date", "2026-03-02")
+    run("done", "Read", "--note", "chapter 2")
+    run("done", "Read", "--count", "2")
+    r = run("log", "read")
+    assert r.code == 0
+    assert r.out.splitlines() == [
+        "Read: 4 entries",
+        "DATE        DAY  COUNT  NOTE",
+        "2026-03-04  Wed  2",
+        "2026-03-04  Wed  1      chapter 2",
+        "2026-03-02  Mon  1",
+        "2026-03-01  Sun  1      chapter 1",
+    ]
+
+
+def test_log_limit_and_since(run):
+    run("add", "Read")
+    for day in range(1, 5):
+        run("done", "Read", "--date", f"2026-03-0{day}")
+    lines = run("log", "Read", "--limit", "2").out.splitlines()
+    assert lines[0] == "Read: 4 entries, newest 2 shown"
+    assert [line.split()[0] for line in lines[2:4]] == ["2026-03-04", "2026-03-03"]
+    assert lines[-1] == "(2 older entries not shown; --limit 0 shows all)"
+    assert len(run("log", "Read", "--limit", "0").out.splitlines()) == 6
+    lines = run("log", "Read", "--since", "2026-03-03").out.splitlines()
+    assert lines[0] == "Read: 2 entries since 2026-03-03" and len(lines) == 4
+    lines = run("log", "Read", "--since", "2026-03-02", "--limit", "1").out.splitlines()
+    assert lines[-1] == "(2 older entries not shown; --limit 0 shows all)"
+
+
+def test_log_empty(run):
+    run("add", "Read")
+    assert run("log", "Read").out == "No completions of 'Read' logged.\n"
+    run("done", "Read", "--date", "2026-03-01")
+    r = run("log", "Read", "--since", "2026-03-02")
+    assert r.out == "No completions of 'Read' logged since 2026-03-02.\n"
+
+
+def test_log_json(run):
+    run("add", "Water", "--target", "8")
+    run("done", "Water", "--date", "2026-03-03", "--count", "3", "--note", "morning")
+    run("done", "Water", "--count", "2")
+    data = run("log", "Water", "--json", "--limit", "1").json()
+    assert set(data) == {"name", "since", "total", "entries"}
+    assert data["name"] == "Water" and data["since"] is None and data["total"] == 2
+    [entry] = data["entries"]
+    assert set(entry) == {"date", "count", "note", "logged_at"}
+    assert entry["date"] == "2026-03-04" and entry["count"] == 2 and entry["note"] is None
+    data = run("log", "Water", "--json", "--since", "2026-03-01").json()
+    assert data["since"] == "2026-03-01"
+    assert [(e["date"], e["note"]) for e in data["entries"]] == [
+        ("2026-03-04", None), ("2026-03-03", "morning"),
+    ]
+
+
+def test_log_errors(run):
+    assert run("log", "Nope").code == 1
+    run("add", "Read")
+    assert run("log", "Read", "--limit", "-1").code == 2
+    assert run("log", "Read", "--since", "yesterday").code == 2
+
+
+def test_log_works_for_archived_habits(run):
+    run("add", "Guitar")
+    run("done", "Guitar", "--note", "scales")
+    run("archive", "Guitar")
+    assert "scales" in run("log", "Guitar").out
+
+
 # --------------------------------------------------------------------------- db location / entry points
 
 

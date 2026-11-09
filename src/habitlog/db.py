@@ -330,6 +330,45 @@ def completion_notes(
     return [(date.fromisoformat(r["day"]), r["note"]) for r in conn.execute(sql, params)]
 
 
+@dataclass(frozen=True)
+class LogEntry:
+    """One logged completion (a single ``done``), as stored."""
+
+    day: date
+    count: int
+    note: str | None
+    logged_at: str
+
+
+def completion_log(
+    conn: sqlite3.Connection,
+    habit: Habit,
+    since: date | None = None,
+    limit: int | None = None,
+) -> tuple[list[LogEntry], int]:
+    """Logged completions of one habit, newest first (by day, then by when they
+    were logged), optionally only those with ``day >= since``.
+
+    Returns ``(entries, total)`` where ``entries`` holds at most ``limit`` rows
+    and ``total`` is how many rows match without the limit.
+    """
+    where = "WHERE habit_id = ?"
+    params: list[Any] = [habit.id]
+    if since is not None:
+        where += " AND day >= ?"
+        params.append(since.isoformat())
+    total = int(conn.execute(f"SELECT COUNT(*) FROM completions {where}", params).fetchone()[0])
+    sql = f"SELECT day, count, note, logged_at FROM completions {where} ORDER BY day DESC, id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    entries = [
+        LogEntry(date.fromisoformat(r["day"]), int(r["count"]), r["note"], r["logged_at"])
+        for r in conn.execute(sql, params)
+    ]
+    return entries, total
+
+
 # --------------------------------------------------------------------------- export / import
 
 

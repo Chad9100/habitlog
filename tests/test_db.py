@@ -165,6 +165,24 @@ def test_completion_notes_date_window_and_order(conn):
     assert [n for _, n in db.completion_notes(conn, h, end=date(2026, 3, 2))] == ["a"]
 
 
+def test_completion_log_newest_first_with_since_and_limit(conn):
+    h = db.add_habit(conn, "Read", "daily", 1, DAY)
+    other = db.add_habit(conn, "Gym", "weekly", 3, DAY)
+    db.add_completion(conn, h, date(2026, 3, 3), 1, "b")
+    db.add_completion(conn, h, date(2026, 3, 1), 2)
+    db.add_completion(conn, h, date(2026, 3, 3), 1, "c")
+    db.add_completion(conn, other, date(2026, 3, 3), 1, "not mine")
+    entries, total = db.completion_log(conn, h)
+    assert total == 3
+    assert [(e.day.day, e.count, e.note) for e in entries] == [(3, 1, "c"), (3, 1, "b"), (1, 2, None)]
+    assert all(e.logged_at for e in entries)
+    entries, total = db.completion_log(conn, h, limit=1)
+    assert total == 3 and [e.note for e in entries] == ["c"]
+    entries, total = db.completion_log(conn, h, since=date(2026, 3, 2))
+    assert total == 2 and [e.note for e in entries] == ["c", "b"]
+    assert db.completion_log(conn, h, since=date(2026, 3, 4)) == ([], 0)
+
+
 def test_undo_removes_the_note_with_its_completion(conn):
     h = db.add_habit(conn, "Read", "daily", 1, DAY)
     db.add_completion(conn, h, DAY, 1, "kept")
