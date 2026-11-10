@@ -33,7 +33,7 @@ Estimates are rough working hours for one person, including tests and docs.
 
 ## v0.4 - Reminders and profiles (about 7 h)
 
-- [ ] `habitlog due`: list habits not yet met for today/this week, with an exit
+- [x] `habitlog due`: list habits not yet met for today/this week, with an exit
       code suitable for shell prompts and cron - 1.5 h
 - [ ] Reminder recipes: documented cron / Task Scheduler snippets that call
       `habitlog due` and show a desktop notification - 2 h

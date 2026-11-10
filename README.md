@@ -38,6 +38,8 @@ scripted (`--json` output, JSON import/export).
   after (`--dry-run` previews it without saving).
 - `report --html FILE`: a self-contained HTML page with a summary table and a
   year heatmap per habit (no scripts or external files; works offline).
+- `due`: what is still left to do today or this week, with an exit code for
+  shell prompts, cron jobs and scripts (`--quiet`, `--count`, `--json`).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -397,6 +399,38 @@ Water              daily     8       3/8            2d      2d
 `TODAY` is `done`, a partial count like `3/8`, `-` when nothing is logged yet,
 or `rest` for a weekday habit on a weekend.
 
+### Due
+
+`due` lists the active habits whose current period isn't met yet: today for
+`daily` and `weekdays` habits, the ISO week for `weekly` ones. Weekday habits
+are never due on a weekend, and archived habits are left out.
+
+```
+$ habitlog due
+Due on 2026-03-04: 3 of 4 habits
+HABIT  EVERY   DONE  LEFT
+Gym    weekly  1/3   2 more this week (5 days left)
+Read   daily   0/1   1 more
+Water  daily   3/8   5 more
+$ habitlog due --count
+3
+```
+
+It exits with `0` when everything is done and `3` when at least one habit is
+due (`1` and `2` keep their usual meaning, see [Exit codes](#exit-codes)), so
+it can drive a prompt or a reminder:
+
+```sh
+# bash prompt: show how many habits are left
+PS1='$(n=$(habitlog due --count); [ "$n" != 0 ] && echo "[$n due] ")'"$PS1"
+# cron, 8 pm: remind only if something is still due
+0 20 * * * habitlog due --quiet; [ $? -eq 3 ] && notify-send "habitlog" "$(habitlog due)"
+```
+
+`--quiet` (`-q`) prints nothing, `--count` prints only the number, and `--json`
+gives each due habit's `period` (`day` or `week`), `period_start`,
+`period_count`, `target`, `remaining` and `days_left` (today included).
+
 ### Stats and heatmap
 
 ```
@@ -672,7 +706,8 @@ grey. The characters and layout are exactly the same as without colour.
 
 `0` success, `1` an error such as an unknown habit, a duplicate name, a future
 date or a bad import file, `2` invalid command-line usage (bad date format,
-unknown option, `--count 0`).
+unknown option, `--count 0`). `habitlog due` also exits with `3` when at
+least one habit is still due.
 
 ## Data location
 

@@ -16,6 +16,7 @@ from .db import Habit, HabitlogError
 
 EXIT_OK = 0
 EXIT_ERROR = 1  # usage errors detected by argparse exit with 2
+EXIT_DUE = 3  # `habitlog due`: at least one habit still needs doing
 YEAR_WEEKS = 53  # stats --year: a full year plus the current week
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # locale-independent
 
@@ -435,6 +436,66 @@ def cmd_log(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     return EXIT_OK
 
 
+def _due_entry(habit: Habit, counts: dict[date, int], today: date) -> dict[str, Any] | None:
+    """What is left to do for ``habit`` in today's open period, or ``None`` if nothing."""
+    period = streaks.open_period(today, habit.every)
+    if period is None:  # weekend for a weekday habit
+        return None
+    count = streaks.period_totals(counts, habit.every).get(period, 0)
+    if count >= habit.target:
+        return None
+    weekly = habit.every == "weekly"
+    return {
+        "name": habit.name,
+        "every": habit.every,
+        "target": habit.target,
+        "period": "week" if weekly else "day",
+        "period_start": period.isoformat(),
+        "period_count": count,
+        "remaining": habit.target - count,
+        # Days left in the period, today included.
+        "days_left": 7 - today.weekday() if weekly else 1,
+    }
+
+
+def cmd_due(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    """Active habits whose current period isn't met yet; exits with EXIT_DUE if any."""
+    habits = db.list_habits(conn, include_archived=False)
+    due = []
+    for h in habits:
+        entry = _due_entry(h, db.completion_counts(conn, h), today)
+        if entry is not None:
+            due.append(entry)
+    code = EXIT_DUE if due else EXIT_OK
+    if args.quiet:
+        return code
+    if args.json:
+        _print_json({"date": today.isoformat(), "habits": len(habits), "due": due})
+        return code
+    if args.count:
+        print(len(due))
+        return code
+    if not habits:
+        print("No habits yet. Add one with: habitlog add NAME")
+        return code
+    if not due:
+        print(f"All done for {today.isoformat()}.")
+        return code
+    print(f"Due on {today.isoformat()}: {len(due)} of {_plural(len(habits), 'habit')}")
+    rows = [["HABIT", "EVERY", "DONE", "LEFT"]]
+    styles: dict[tuple[int, int], str] = {}
+    for e in due:
+        if args.color_on and e["period_count"]:
+            styles[(len(rows), 2)] = colors.STATUS_STYLES["partial"]
+        left = f"{e['remaining']} more"
+        if e["period"] == "week":
+            left += f" this week ({_plural(e['days_left'], 'day')} left)"
+        rows.append([e["name"], e["every"], f"{e['period_count']}/{e['target']}", left])
+    for line in _table(rows, styles):
+        print(line)
+    return code
+
+
 def _month_rate(habit: Habit, counts: dict[date, int], month: date, today: date) -> streaks.Rate:
     """Periods met in ``month`` (up to today), counted from when the habit started."""
     since = min([habit.created, *counts]) if counts else habit.created
@@ -697,6 +758,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("list", cmd_list, "show habits with today's status and streaks")
     p.add_argument("--all", action="store_true", help="include archived habits")
     p.add_argument("--json", action="store_true")
+
+    p = add(
+        "due", cmd_due,
+        f"list habits not yet met today or this week (exit code {EXIT_DUE} if any are due)",
+    )
+    out = p.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true")
+    out.add_argument(
+        "--quiet", "-q", action="store_true", help="print nothing, only set the exit code"
+    )
+    out.add_argument("--count", action="store_true", help="print only the number of due habits")
 
     p = add("stats", cmd_stats, "completion rate, streaks and a calendar heatmap")
     p.add_argument("name")
