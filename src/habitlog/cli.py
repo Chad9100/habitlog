@@ -795,6 +795,44 @@ def cmd_import(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
     return EXIT_OK
 
 
+def cmd_sync(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    path = Path(args.file)
+    result: db.ImportResult | None = None
+    before: Any = None
+    if path.exists():
+        try:
+            before = json.loads(path.read_text(encoding="utf-8-sig"))
+        except OSError as exc:
+            raise HabitlogError(f"cannot read {path}: {exc.strerror or exc}") from None
+        except json.JSONDecodeError as exc:
+            raise HabitlogError(f"{path} is not valid JSON: {exc}") from None
+        result = db.import_data(conn, before, today)
+    merged = db.export_data(conn)
+    changed = before != merged
+    if changed:
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(
+                json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+                newline="",
+            )
+            tmp.replace(path)
+        except OSError as exc:
+            raise HabitlogError(f"cannot write {path}: {exc.strerror or exc}") from None
+    if result is None:
+        print(f"Created {path} with {_plural(len(merged['habits']), 'habit')}.")
+    else:
+        print(
+            f"Synced with {path}: pulled {_plural(result.habits_created, 'new habit')}, "
+            f"{_plural(result.completions_added, 'completion')}, "
+            f"{_plural(result.notes_added, 'note')}, "
+            f"{_plural(result.pauses_added, 'pause')}; "
+            + ("file updated." if changed else "file already up to date.")
+        )
+    return EXIT_OK
+
+
 def _count_habits(path: Path) -> int | None:
     """Active habits in a database file, opened read-only; None if unreadable."""
     try:
@@ -1012,6 +1050,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("import", cmd_import, "merge a JSON export (safe to repeat)")
     p.add_argument("file", help="JSON file from 'habitlog export', or - for stdin")
+
+    p = add("sync", cmd_sync, "merge with a JSON file in both directions (e.g. a synced folder)")
+    p.add_argument("file", help="sync file; created if it does not exist")
     return parser
 
 

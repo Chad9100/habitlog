@@ -50,8 +50,11 @@ Estimates are rough working hours for one person, including tests and docs.
 
 ## v0.5 - Sync via a plain file (about 5 h)
 
-- [ ] `habitlog sync FILE`: two-way merge with a JSON file kept in a synced
-      folder (Dropbox, Syncthing, a git repo); builds on the idempotent import - 3 h
+- [x] `habitlog sync FILE`: two-way merge with a JSON file kept in a synced
+      folder (Dropbox, Syncthing, a git repo); builds on the idempotent import
+      (additive only; deletions are the next item) - 1.5 h
+- [ ] Sync conflict handling for edited habit settings (every/target/archived
+      differ between copies) and a `--dry-run` preview - 1.5 h
 - [ ] Track deletions/undos in the sync file so they propagate instead of being
       re-imported - 2 h
 

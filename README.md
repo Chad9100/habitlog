@@ -799,6 +799,29 @@ $ habitlog --db fresh.db import backup.json
 Imported: 0 new habits, 1 already present, 0 completions added.
 ```
 
+### Sync through a plain file
+
+`habitlog sync FILE` keeps a JSON file (the same format as `export`) in step
+with the database, in both directions: it imports what the file has, then
+writes the merged result back. Put the file in a Dropbox/Syncthing folder or a
+git repo and run `sync` on each machine. A missing file is created. The merge
+is the same as `import`, so it never loses data and repeating it changes
+nothing; the file is only rewritten when it actually changes (via a temporary
+file, so an interrupted write can't leave it half-written). An unreadable or
+invalid file is an error and is left untouched.
+
+```
+$ habitlog --db laptop.db sync sync.json
+Created sync.json with 2 habits.
+$ habitlog --db desk.db sync sync.json
+Synced with sync.json: pulled 2 new habits, 1 completion, 0 notes, 0 pauses; file updated.
+$ habitlog --db laptop.db sync sync.json
+Synced with sync.json: pulled 1 new habit, 1 completion, 0 notes, 0 pauses; file already up to date.
+```
+
+Sync only adds: a completion you undo, or a habit you remove, comes back at the
+next sync from any copy that still has it. Propagating deletions is planned.
+
 ### Profiles
 
 A profile is a separate database with its own habits. Pick one with
