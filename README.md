@@ -51,6 +51,7 @@ scripted (`--json` output, JSON import/export).
   gap between months that fits in 80 columns.
 - Optional colour: heatmaps are shaded in greens and `list` highlights today's
   status. Only on a terminal, never when `NO_COLOR` is set (`--color` overrides).
+- Shell completion for bash, zsh and PowerShell: `habitlog completion SHELL`.
 - Export to CSV or JSON; import JSON back. Import is idempotent: importing the
   same file twice does not duplicate completions.
 
@@ -875,6 +876,22 @@ and `work` are the same profile). `default` is the ordinary default database.
 chose it, and each profile's path, whether its file exists and its number of
 active habits. Listing profiles never creates a database. `--db` and
 `--profile` can't be combined.
+
+### Shell completion
+
+`habitlog completion SHELL` prints a completion script for `bash`, `zsh` or
+`powershell`. It completes commands, options and fixed values such as
+`--every`, `--color`, `--format` and `--prefer` (not habit names). The scripts
+are generated from the command-line parser, so they always match the installed
+version. Load one for the current session, or put the line in your profile:
+
+```
+eval "$(habitlog completion bash)"                          # ~/.bashrc
+eval "$(habitlog completion zsh)"                           # ~/.zshrc
+habitlog completion powershell | Out-String | Invoke-Expression   # $PROFILE
+```
+
+Printing a script needs no database.
 
 ### Colour
 

@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
-from . import __version__, colors, db, heatmap, report, streaks
+from . import __version__, colors, completion, db, heatmap, report, streaks
 from .db import Habit, HabitlogError
 
 EXIT_OK = 0
@@ -869,6 +869,11 @@ def _count_habits(path: Path) -> int | None:
         conn.close()
 
 
+def cmd_completion(args: argparse.Namespace, today: date) -> int:
+    sys.stdout.write(completion.script(args.shell, build_parser()))
+    return EXIT_OK
+
+
 def cmd_profiles(args: argparse.Namespace, today: date) -> int:
     choice = db.choose_db(args.db, args.profile)
     rows_data = []
@@ -1065,6 +1070,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("profiles", cmd_profiles, "list profiles and their databases; * marks the active one")
     p.set_defaults(needs_db=False)
     p.add_argument("--json", action="store_true")
+
+    p = add("completion", cmd_completion, "print a shell completion script (bash, zsh, powershell)")
+    p.set_defaults(needs_db=False)
+    p.add_argument("shell", choices=completion.SHELLS)
 
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")

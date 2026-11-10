@@ -63,7 +63,9 @@ Estimates are rough working hours for one person, including tests and docs.
 ## v1.0 - Release (about 4 h)
 
 - [ ] Publish to PyPI with a trusted-publishing GitHub Actions workflow - 1.5 h
-- [ ] Shell completion for bash, zsh and PowerShell - 1.5 h
+- [x] Shell completion for bash, zsh and PowerShell: `habitlog completion SHELL`,
+      generated from the parser (commands, options, fixed choices) - 1.5 h
+- [ ] Complete habit names dynamically (`habitlog done <TAB>`) - 1 h
 - [ ] Freeze the JSON output and export formats; document them as stable - 1 h
 
-Total planned: about 31.75 hours.
+Total planned: about 32.75 hours.
