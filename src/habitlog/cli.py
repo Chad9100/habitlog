@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
-from . import __version__, db, heatmap, report, streaks
+from . import __version__, colors, db, heatmap, report, streaks
 from .db import Habit, HabitlogError
 
 EXIT_OK = 0
@@ -91,9 +91,24 @@ def _print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _table(rows: list[list[str]]) -> list[str]:
+def _table(
+    rows: list[list[str]], styles: dict[tuple[int, int], str] | None = None
+) -> list[str]:
+    """Align ``rows`` in columns. ``styles`` maps (row, column) to an ANSI style;
+    the padding stays outside the colour codes so the columns still line up."""
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-    return ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
+    styles = styles or {}
+    return [
+        "  ".join(
+            colors.paint(c, styles.get((y, x))) + " " * (w - len(c))
+            for x, (c, w) in enumerate(zip(r, widths))
+        ).rstrip()
+        for y, r in enumerate(rows)
+    ]
+
+
+def _status_style(progress: streaks.Progress) -> str:
+    return colors.STATUS_STYLES.get(progress.status, "")
 
 
 def _status_text(habit: Habit, progress: streaks.Progress) -> str:
@@ -287,7 +302,10 @@ def cmd_list(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
         print("No habits yet. Add one with: habitlog add NAME")
         return EXIT_OK
     rows = [["HABIT", "EVERY", "TARGET", "TODAY", "STREAK", "BEST"]]
+    styles: dict[tuple[int, int], str] = {}
     for h, s in zip(habits, summaries):
+        if args.color_on:
+            styles[(len(rows), 3)] = _status_style(s["_progress"])
         u = "w" if h.every == "weekly" else "d"
         name = h.name + (" (archived)" if h.archived else "")
         rows.append(
@@ -300,7 +318,7 @@ def cmd_list(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
                 f"{s['longest_streak']}{u}",
             ]
         )
-    for line in _table(rows):
+    for line in _table(rows, styles):
         print(line)
     return EXIT_OK
 
@@ -362,7 +380,8 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     day_target = 1 if habit.every == "weekly" else habit.target
     compact = args.compact or args.year
     for line in heatmap.render(
-        counts, day_target, today, args.weeks, ascii=use_ascii, compact=compact
+        counts, day_target, today, args.weeks, ascii=use_ascii, compact=compact,
+        color=args.color_on,
     ):
         print(line)
     shown = notes[-args.notes:] if args.notes else []
@@ -481,7 +500,7 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
         weekly = h.every == "weekly"
         grid = heatmap.month_grid(
             counts, 1 if weekly else h.target, month, today, ascii=use_ascii,
-            week_target=h.target if weekly else None,
+            week_target=h.target if weekly else None, color=args.color_on,
         )
         for line in grid:
             print(line)
@@ -497,10 +516,11 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     print(" " * width + units)
     for name, (h, counts, rate) in zip(names, data):
         strip = heatmap.month_strip(
-            counts, 1 if h.every == "weekly" else h.target, month, today, ascii=use_ascii
+            counts, 1 if h.every == "weekly" else h.target, month, today, ascii=use_ascii,
+            color=args.color_on,
         )
         print(f"{name.ljust(width)}{strip}  {_rate_text(rate, h.every)}")
-    print(heatmap.legend(use_ascii))
+    print(heatmap.legend(use_ascii, args.color_on))
     return EXIT_OK
 
 
@@ -610,14 +630,25 @@ def cmd_import(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
 
 def build_parser() -> argparse.ArgumentParser:
     db_help = "database file (default: $HABITLOG_DB, else a per-user data folder)"
+    color_help = (
+        "colour heatmaps and statuses: auto (default; only on a terminal and "
+        "when NO_COLOR is not set), always or never"
+    )
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", metavar="PATH", default=argparse.SUPPRESS, help=db_help)
+    common.add_argument(
+        "--color", choices=colors.WHEN_CHOICES, default=argparse.SUPPRESS, metavar="WHEN",
+        help=color_help,
+    )
 
     parser = argparse.ArgumentParser(
         prog="habitlog", description="Track habits and streaks from the terminal."
     )
     parser.add_argument("--version", action="version", version=f"habitlog {__version__}")
     parser.add_argument("--db", metavar="PATH", default=None, help=db_help)
+    parser.add_argument(
+        "--color", choices=colors.WHEN_CHOICES, default="auto", metavar="WHEN", help=color_help
+    )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
@@ -728,6 +759,7 @@ def main(argv: Sequence[str] | None = None, *, today: date | None = None) -> int
     _safe_stdout()
     args = build_parser().parse_args(argv)
     today = today or date.today()
+    args.color_on = colors.use_color(args.color)
     try:
         path = db.resolve_db_path(args.db)
         try:

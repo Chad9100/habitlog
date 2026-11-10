@@ -28,7 +28,8 @@ Estimates are rough working hours for one person, including tests and docs.
       with a year heatmap per habit and summary table - 4 h
 - [x] Year-long heatmap in the terminal: `stats --year` (53 weeks) and
       `--compact`, one column per week with month separators, fits 80 columns - 1 h
-- [ ] Optional colour output (respecting `NO_COLOR` and non-TTY output) - 1 h
+- [x] Optional colour output: `--color auto|always|never`, respecting `NO_COLOR`,
+      `TERM=dumb` and non-TTY output - 1 h
 
 ## v0.4 - Reminders and profiles (about 7 h)
 

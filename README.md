@@ -43,6 +43,8 @@ scripted (`--json` output, JSON import/export).
   ASCII automatically when the console can't show block characters, or with
   `--ascii`). `stats --year` shows the last 53 weeks in a compact layout with a
   gap between months that fits in 80 columns.
+- Optional colour: heatmaps are shaded in greens and `list` highlights today's
+  status. Only on a terminal, never when `NO_COLOR` is set (`--color` overrides).
 - Export to CSV or JSON; import JSON back. Import is idempotent: importing the
   same file twice does not duplicate completions.
 
@@ -648,6 +650,24 @@ $ habitlog --db fresh.db import backup.json
 Imported: 0 new habits, 1 already present, 0 completions added.
 ```
 
+### Colour
+
+`stats`, `month` and `list` can use ANSI colour: heatmap shades go from grey
+(none) through dim and normal green to bold green (target met), and the `TODAY`
+column of `list` shows `done` in green, a partial count in yellow and `rest` in
+grey. The characters and layout are exactly the same as without colour.
+
+`--color WHEN` (before or after the command) chooses when:
+
+- `auto` (default): only when output goes to a terminal, the
+  [`NO_COLOR`](https://no-color.org) environment variable is unset or empty and
+  `TERM` is not `dumb`. Piped or redirected output is never coloured. On
+  Windows, ANSI support is switched on for the console if it is available.
+- `always`: colour even when piped, e.g. `habitlog stats Gym --color always | less -R`.
+- `never`: plain text.
+
+`--json` output, exports and the HTML report are never affected.
+
 ### Exit codes
 
 `0` success, `1` an error such as an unknown habit, a duplicate name, a future
@@ -685,6 +705,7 @@ Layout:
 
 - `src/habitlog/streaks.py` pure date and streak logic (no I/O, `today` passed in)
 - `src/habitlog/heatmap.py` text heatmap and month calendar rendering
+- `src/habitlog/colors.py` ANSI colour and the `--color`/`NO_COLOR` decision
 - `src/habitlog/report.py` self-contained HTML report (pure, `today` passed in)
 - `src/habitlog/db.py` SQLite storage, migrations, import/export
 - `src/habitlog/cli.py` argparse commands
