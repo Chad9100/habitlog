@@ -24,7 +24,7 @@ Estimates are rough working hours for one person, including tests and docs.
 
 ## v0.3 - Reports (about 6 h)
 
-- [ ] `habitlog report --html report.html`: a single self-contained HTML file
+- [x] `habitlog report --html report.html`: a single self-contained HTML file
       with a year heatmap per habit and summary table - 4 h
 - [ ] Year-long heatmap in the terminal (`stats --weeks 53` layout tuned for
       wide terminals, month separators) - 1 h

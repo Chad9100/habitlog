@@ -36,6 +36,8 @@ scripted (`--json` output, JSON import/export).
 - `edit`: change a habit's frequency or target later; the whole history is
   re-evaluated with the new settings and the streak change is shown before and
   after (`--dry-run` previews it without saving).
+- `report --html FILE`: a self-contained HTML page with a summary table and a
+  year heatmap per habit (no scripts or external files; works offline).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -322,6 +324,59 @@ $ habitlog month Stretch --month 2026-10 --json
 }
 ```
 
+### HTML report
+
+`habitlog report --html FILE` writes a single, self-contained HTML file: a
+summary table of every active habit (streaks, periods met and completion rate
+over the window, completions, last day done) and a year-long heatmap per habit.
+It uses inline CSS and SVG only, with no scripts or external files, so it
+opens offline, follows the system's light/dark setting and can be mailed or
+archived as is. Hovering a day shows its count (against the daily target) and
+any notes. `--weeks N` changes the window (default 53, about a year), `--all`
+adds archived habits, `--title` sets the page title and `--html -` writes the
+page to stdout.
+
+Real output from a throwaway database with about 200 days of made-up history
+(today was 2026-11-09):
+
+```
+$ habitlog report --html report.html
+Wrote a report of 4 habits over 53 weeks to report.html.
+
+$ habitlog report --html q3.html --weeks 13 --title "Q3 habits"
+Wrote a report of 4 habits over 13 weeks to q3.html.
+
+$ habitlog archive Water
+Archived 'Water' (history kept; 'habitlog unarchive' brings it back).
+
+$ habitlog report --html report.html
+Wrote a report of 3 habits over 53 weeks to report.html.
+
+$ habitlog report --html report.html --all
+Wrote a report of 4 habits over 53 weeks to report.html.
+
+$ habitlog --db empty.db report --html x.html
+habitlog: error: no habits to report on
+```
+
+The summary table of that last `report.html` (155 KB, 4 heatmaps), with its
+cells pulled out of the HTML and joined by `|`:
+
+```
+Habit | Every | Target | Current streak | Longest streak | Periods met | Rate | Completions | Last done
+Gym | weekly | 3 | 2 weeks | 4 weeks | 11/29 | 38% | 63 | 2026-11-06
+Read 20 pages | daily | 1 | 3 days | 23 days | 167/199 | 84% | 167 | 2026-11-08
+Stretch | weekdays | 1 | 23 days | 23 days | 108/141 | 77% | 108 | 2026-11-06
+Water (archived) | daily | 8 | 0 days | 3 days | 8/59 | 14% | 326 | 2026-11-09
+```
+
+Rates follow the same rules as `stats` and `month`: they start when the habit
+started (its first completion or the day it was added, whichever is earlier),
+and the current day or week only counts once it is met. In the heatmaps,
+weekly habits shade each day as done or not (their target applies to the whole
+week), and for `weekdays` habits, Saturdays and Sundays without completions are
+drawn as outlined rest days.
+
 ### List
 
 `list` shows active habits; `list --all` includes archived ones.
@@ -580,6 +635,7 @@ Layout:
 
 - `src/habitlog/streaks.py` pure date and streak logic (no I/O, `today` passed in)
 - `src/habitlog/heatmap.py` text heatmap and month calendar rendering
+- `src/habitlog/report.py` self-contained HTML report (pure, `today` passed in)
 - `src/habitlog/db.py` SQLite storage, migrations, import/export
 - `src/habitlog/cli.py` argparse commands
 - `tests/` pytest suite; every test uses a temporary database

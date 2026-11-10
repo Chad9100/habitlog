@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
-from . import __version__, db, heatmap, streaks
+from . import __version__, db, heatmap, report, streaks
 from .db import Habit, HabitlogError
 
 EXIT_OK = 0
@@ -496,6 +496,52 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     return EXIT_OK
 
 
+def cmd_report(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    habits = db.list_habits(conn, include_archived=args.all)
+    if not habits:
+        archived = not args.all and db.list_habits(conn, include_archived=True)
+        hint = " (archived habits need --all)" if archived else ""
+        raise HabitlogError(f"no habits to report on{hint}")
+    first = report.window_start(today, args.weeks)
+    reports = []
+    for h in habits:
+        counts = db.completion_counts(conn, h)
+        since = min([h.created, *counts]) if counts else h.created
+        notes: dict[date, list[str]] = {}
+        for d, note in db.completion_notes(conn, h, first, today):
+            notes.setdefault(d, []).append(note)
+        reports.append(
+            report.HabitReport(
+                name=h.name,
+                every=h.every,
+                target=h.target,
+                archived=h.archived,
+                counts=counts,
+                rate=streaks.rate_between(
+                    counts, h.every, h.target, max(first, since), today, today
+                ),
+                current_streak=streaks.current_streak(counts, h.every, h.target, today),
+                longest_streak=streaks.longest_streak(counts, h.every, h.target, today),
+                notes=notes,
+            )
+        )
+    title = args.title or "Habit report"
+    document = report.render_html(reports, today, args.weeks, title)
+    if args.html == "-":
+        sys.stdout.write(document)
+        return EXIT_OK
+    try:
+        with open(args.html, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(document)
+    except OSError as exc:
+        raise HabitlogError(f"cannot write {args.html}: {exc.strerror or exc}") from None
+    print(
+        f"Wrote a report of {_plural(len(reports), 'habit')} over "
+        f"{_plural(args.weeks, 'week')} to {args.html}."
+    )
+    return EXIT_OK
+
+
 def cmd_export(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
     data = db.export_data(conn)
     out: TextIO
@@ -640,6 +686,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="include archived habits in the overview")
     p.add_argument("--json", action="store_true")
     p.add_argument("--ascii", action="store_true", help="plain ASCII shading")
+
+    p = add("report", cmd_report, "write a self-contained HTML report with a heatmap per habit")
+    p.add_argument(
+        "--html", required=True, metavar="FILE", help="HTML file to write, or - for stdout"
+    )
+    p.add_argument(
+        "--weeks", type=_positive_int, default=53, help="weeks to cover (default 53, about a year)"
+    )
+    p.add_argument("--all", action="store_true", help="include archived habits")
+    p.add_argument("--title", help='page title (default "Habit report")')
 
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")
