@@ -217,3 +217,121 @@ def test_pause_errors(run):
     r = run("pause", "Read", "--days", "2")
     assert r.code == 1 and "archived" in r.err
     assert run("pause", "Nope", "--days", "2").code == 1
+
+
+def test_due_says_when_habits_are_paused_rather_than_done(run):
+    assert run("add", "Read").code == 0
+    assert run("add", "Gym").code == 0
+    assert run("pause", "Read", "--days", "2").code == 0
+    assert run("pause", "Gym", "--days", "2").code == 0
+    r = run("due")
+    assert r.code == 0
+    assert r.out.strip() == "Nothing due on 2026-03-04: every habit is paused."
+    assert run("due", "--json").json()["paused"] == 2
+    assert run("done", "Gym").code == 0  # met anyway: no longer counted as paused
+    assert run("due").out.strip() == "All done for 2026-03-04 (1 habit paused)."
+    assert run("unpause", "Read").code == 0
+    assert run("done", "Read").code == 0
+    assert run("due").out.strip() == "All done for 2026-03-04."
+    assert run("due", "--json").json()["paused"] == 0
+
+
+# --------------------------------------------------------------------------- export / import
+
+
+def test_export_includes_pauses_only_when_there_are_some(conn):
+    read = db.add_habit(conn, "Read", "daily", 1, date(2026, 1, 1))
+    db.add_habit(conn, "Gym", "weekly", 2, date(2026, 1, 1))
+    db.add_pause(conn, read, date(2026, 2, 1), date(2026, 2, 3))
+    db.add_pause(conn, read, date(2026, 4, 1), date(2026, 4, 1))  # future pauses too
+    habits = {h["name"]: h for h in db.export_data(conn)["habits"]}
+    assert habits["Read"]["pauses"] == [
+        {"from": "2026-02-01", "to": "2026-02-03"},
+        {"from": "2026-04-01", "to": "2026-04-01"},
+    ]
+    assert "pauses" not in habits["Gym"]
+
+
+def test_pauses_round_trip_and_reimport_is_idempotent(conn):
+    src = db.connect(":memory:")
+    try:
+        h = db.add_habit(src, "Read", "daily", 1, date(2026, 1, 1))
+        db.add_completion(src, h, date(2026, 2, 5))
+        db.add_pause(src, h, date(2026, 2, 1), date(2026, 2, 3))
+        db.add_pause(src, h, date(2026, 3, 10), date(2026, 3, 20))
+        data = db.export_data(src)
+    finally:
+        src.close()
+    first = db.import_data(conn, data, TODAY)
+    assert (first.habits_created, first.pauses_added) == (1, 2)
+    read = db.get_habit(conn, "Read")
+    assert db.list_pauses(conn, read) == [
+        db.Pause(date(2026, 2, 1), date(2026, 2, 3)),
+        db.Pause(date(2026, 3, 10), date(2026, 3, 20)),
+    ]
+    again = db.import_data(conn, data, TODAY)
+    assert (again.habits_existing, again.completions_added, again.pauses_added) == (1, 0, 0)
+    assert len(db.list_pauses(conn, read)) == 2
+
+
+def test_imported_pauses_merge_with_existing_ones(conn):
+    h = db.add_habit(conn, "Read", "daily", 1, date(2026, 1, 1))
+    db.add_pause(conn, h, date(2026, 2, 1), date(2026, 2, 5))
+    data = {
+        "habits": [
+            {
+                "name": "read",
+                "pauses": [
+                    {"from": "2026-02-02", "to": "2026-02-04"},  # already covered
+                    {"from": "2026-02-06", "to": "2026-02-08"},  # adjacent: joins
+                ],
+            }
+        ]
+    }
+    result = db.import_data(conn, data, TODAY)
+    assert result.pauses_added == 1
+    assert db.list_pauses(conn, h) == [db.Pause(date(2026, 2, 1), date(2026, 2, 8))]
+
+
+def test_old_exports_without_pauses_still_import(conn):
+    data = {
+        "format": "habitlog-export",
+        "version": 1,
+        "habits": [{"name": "Read", "completions": [{"date": "2026-03-01", "count": 1}]}],
+    }
+    result = db.import_data(conn, data, TODAY)
+    assert (result.habits_created, result.completions_added, result.pauses_added) == (1, 1, 0)
+    assert db.list_pauses(conn, db.get_habit(conn, "Read")) == []
+
+
+@pytest.mark.parametrize(
+    "pauses, message",
+    [
+        ([{"from": "2026-03-01"}], "habits[0].pauses[0]: invalid date None"),
+        ("2026-03-01", "pauses must be a list"),
+        (["2026-03-01"], "expected an object with 'from' and 'to'"),
+        ([{"from": "2026-03-05", "to": "2026-03-01"}], "before it starts"),
+        ([{"from": "2026-03-01", "to": "nope"}], "habits[0].pauses[0]"),
+        ([{"from": "2026-01-01", "to": "2027-06-01"}], "at most 366 days"),
+    ],
+)
+def test_bad_pauses_in_an_import_are_rejected(conn, pauses, message):
+    data = {"habits": [{"name": "Read", "pauses": pauses}]}
+    with pytest.raises(db.HabitlogError, match=message.replace("[", r"\[").replace("]", r"\]")):
+        db.import_data(conn, data, TODAY)
+    assert db.list_habits(conn, include_archived=True) == []  # nothing half-imported
+
+
+def test_import_reports_added_pauses(run, tmp_path):
+    path = tmp_path / "backup.json"
+    path.write_text(
+        '{"habits": [{"name": "Read", "pauses": [{"from": "2026-03-02", "to": "2026-03-06"}]}]}',
+        encoding="utf-8",
+    )
+    r = run("import", str(path))
+    assert r.code == 0, r.err
+    assert r.out.strip() == (
+        "Imported: 1 new habit, 0 already present, 0 completions added, 1 pause added."
+    )
+    assert "1 pause added" not in run("import", str(path)).out
+    assert run("due").out.strip() == "Nothing due on 2026-03-04: every habit is paused."

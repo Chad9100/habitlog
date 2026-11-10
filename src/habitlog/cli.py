@@ -548,15 +548,22 @@ def cmd_due(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     """Active habits whose current period isn't met yet; exits with EXIT_DUE if any."""
     habits = db.list_habits(conn, include_archived=False)
     due = []
+    paused_now = 0  # habits left out only because today's period is paused
     for h in habits:
-        entry = _due_entry(h, db.completion_counts(conn, h), today, db.paused_days(conn, h))
+        counts = db.completion_counts(conn, h)
+        paused = db.paused_days(conn, h)
+        entry = _due_entry(h, counts, today, paused)
         if entry is not None:
             due.append(entry)
+        elif paused and _due_entry(h, counts, today) is not None:
+            paused_now += 1
     code = EXIT_DUE if due else EXIT_OK
     if args.quiet:
         return code
     if args.json:
-        _print_json({"date": today.isoformat(), "habits": len(habits), "due": due})
+        _print_json(
+            {"date": today.isoformat(), "habits": len(habits), "paused": paused_now, "due": due}
+        )
         return code
     if args.count:
         print(len(due))
@@ -565,7 +572,12 @@ def cmd_due(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
         print("No habits yet. Add one with: habitlog add NAME")
         return code
     if not due:
-        print(f"All done for {today.isoformat()}.")
+        if paused_now == len(habits):
+            print(f"Nothing due on {today.isoformat()}: every habit is paused.")
+        elif paused_now:
+            print(f"All done for {today.isoformat()} ({_plural(paused_now, 'habit')} paused).")
+        else:
+            print(f"All done for {today.isoformat()}.")
         return code
     print(f"Due on {today.isoformat()}: {len(due)} of {_plural(len(habits), 'habit')}")
     rows = [["HABIT", "EVERY", "DONE", "LEFT"]]
@@ -766,6 +778,7 @@ def cmd_import(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
         f"{result.habits_existing} already present, "
         f"{_plural(result.completions_added, 'completion')} added"
         + (f", {_plural(result.notes_added, 'note')} added" if result.notes_added else "")
+        + (f", {_plural(result.pauses_added, 'pause')} added" if result.pauses_added else "")
         + (
             f", {_plural(result.notes_skipped, 'note')} skipped (no free completion that day)"
             if result.notes_skipped

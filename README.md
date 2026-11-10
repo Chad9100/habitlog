@@ -433,7 +433,8 @@ PS1='$(n=$(habitlog due --count); [ "$n" != 0 ] && echo "[$n due] ")'"$PS1"
 
 `--quiet` (`-q`) prints nothing, `--count` prints only the number, and `--json`
 gives each due habit's `period` (`day` or `week`), `period_start`,
-`period_count`, `target`, `remaining` and `days_left` (today included).
+`period_count`, `target`, `remaining` and `days_left` (today included), plus a
+`paused` count of habits left out because they are paused.
 
 ### Stats and heatmap
 
@@ -688,7 +689,7 @@ Run    daily  1       -      9d      9d
 $ habitlog pause Run --days 3
 Paused 'Run' from 2026-11-10 to 2026-11-12 (3 days). Missed days in a pause don't break the streak; completions still count.
 $ habitlog due
-All done for 2026-11-10.
+Nothing due on 2026-11-10: every habit is paused.
 $ habitlog pause Run --list
 Pauses of 'Run':
   2026-11-02 to 2026-11-06 (5 days)
@@ -697,8 +698,10 @@ $ habitlog unpause Run
 Removed the pause of 'Run': 2026-11-10 to 2026-11-12 (3 days).
 ```
 
-Pauses are not yet part of export/import, and heatmaps don't mark paused days
-yet (see the roadmap).
+When some habits are met and the rest are paused, `due` says so
+(`All done for 2026-11-10 (1 habit paused).`), and `due --json` has a `paused`
+count. Pauses travel with export/import (see below). Heatmaps don't mark
+paused days yet (see the roadmap).
 
 ### Export and import
 
@@ -731,6 +734,22 @@ and per-day completion counts; a day with notes also has a `notes` list
 matches habits by name (case-insensitively), creates the missing ones and only
 adds completions up to the imported per-day count, so running it again changes
 nothing. Existing habits keep their own settings.
+
+A habit with pauses also has a `pauses` list
+(`{"from": "2026-11-02", "to": "2026-11-06"}`, both days included). Imported
+pauses are merged with the habit's own the same way `pause` merges them, and
+one that is already covered changes nothing. Exports made before pauses
+existed simply have no `pauses` and import as before. With the `Run` database
+from the pause demo above:
+
+```
+$ habitlog export -o backup.json
+Exported 1 habit to backup.json.
+$ habitlog --db fresh.db import backup.json
+Imported: 1 new habit, 0 already present, 9 completions added, 2 pauses added.
+$ habitlog --db fresh.db import backup.json
+Imported: 0 new habits, 1 already present, 0 completions added.
+```
 
 Notes merge the same way. An imported note that the day doesn't have yet is
 put on one of that day's completions without a note; if every completion that

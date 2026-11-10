@@ -31,7 +31,7 @@ Estimates are rough working hours for one person, including tests and docs.
 - [x] Optional colour output: `--color auto|always|never`, respecting `NO_COLOR`,
       `TERM=dumb` and non-TTY output - 1 h
 
-## v0.4 - Reminders and profiles (about 8.5 h)
+## v0.4 - Reminders and profiles (about 8.75 h)
 
 - [x] `habitlog due`: list habits not yet met for today/this week, with an exit
       code suitable for shell prompts and cron - 1.5 h
@@ -42,9 +42,11 @@ Estimates are rough working hours for one person, including tests and docs.
 - [x] Pause a habit for a date range (vacation) without breaking its streak:
       `pause`/`unpause` (schema migration 3); paused periods are skipped by
       streaks, rates and `due` - 1.5 h
-- [ ] Pauses everywhere else: mark paused days in the terminal heatmaps, `month`
-      and the HTML report, and carry pauses through export/import (split out of
-      the item above) - 1.5 h
+- [x] Carry pauses through JSON export/import (merged, idempotent, old exports
+      still import) and make `due` say when habits are paused rather than
+      done (split out of the item above) - 0.75 h
+- [ ] Mark paused days in the terminal heatmaps, `month` and the HTML report
+      (split out of the item above) - 1 h
 
 ## v0.5 - Sync via a plain file (about 5 h)
 
@@ -59,4 +61,4 @@ Estimates are rough working hours for one person, including tests and docs.
 - [ ] Shell completion for bash, zsh and PowerShell - 1.5 h
 - [ ] Freeze the JSON output and export formats; document them as stable - 1 h
 
-Total planned: about 31.5 hours.
+Total planned: about 31.75 hours.

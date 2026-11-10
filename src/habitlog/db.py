@@ -510,12 +510,7 @@ def paused_days(conn: sqlite3.Connection, habit: Habit) -> frozenset[date]:
     return frozenset(days)
 
 
-def add_pause(conn: sqlite3.Connection, habit: Habit, first: date, last: date) -> Pause:
-    """Pause ``habit`` from ``first`` to ``last`` (inclusive).
-
-    Overlapping or directly adjacent pauses are merged into one, so the stored
-    ranges never overlap. Returns the resulting (possibly merged) pause.
-    """
+def _check_pause(first: date, last: date) -> None:
     if last < first:
         raise HabitlogError(
             f"pause ends ({last.isoformat()}) before it starts ({first.isoformat()})"
@@ -524,22 +519,36 @@ def add_pause(conn: sqlite3.Connection, habit: Habit, first: date, last: date) -
         raise HabitlogError(
             f"a pause can be at most {MAX_PAUSE_DAYS} days; archive the habit instead"
         )
+
+
+def _merge_pause(conn: sqlite3.Connection, habit_id: int, first: date, last: date) -> Pause:
+    """Store a pause, merging it with overlapping or adjacent ones (no transaction)."""
     one = timedelta(days=1)
-    with transaction(conn):
-        rows = conn.execute(
-            "SELECT id, first_day, last_day FROM pauses "
-            "WHERE habit_id = ? AND first_day <= ? AND last_day >= ?",
-            (habit.id, (last + one).isoformat(), (first - one).isoformat()),
-        ).fetchall()
-        for r in rows:
-            first = min(first, date.fromisoformat(r["first_day"]))
-            last = max(last, date.fromisoformat(r["last_day"]))
-            conn.execute("DELETE FROM pauses WHERE id = ?", (r["id"],))
-        conn.execute(
-            "INSERT INTO pauses (habit_id, first_day, last_day) VALUES (?, ?, ?)",
-            (habit.id, first.isoformat(), last.isoformat()),
-        )
+    rows = conn.execute(
+        "SELECT id, first_day, last_day FROM pauses "
+        "WHERE habit_id = ? AND first_day <= ? AND last_day >= ?",
+        (habit_id, (last + one).isoformat(), (first - one).isoformat()),
+    ).fetchall()
+    for r in rows:
+        first = min(first, date.fromisoformat(r["first_day"]))
+        last = max(last, date.fromisoformat(r["last_day"]))
+        conn.execute("DELETE FROM pauses WHERE id = ?", (r["id"],))
+    conn.execute(
+        "INSERT INTO pauses (habit_id, first_day, last_day) VALUES (?, ?, ?)",
+        (habit_id, first.isoformat(), last.isoformat()),
+    )
     return Pause(first, last)
+
+
+def add_pause(conn: sqlite3.Connection, habit: Habit, first: date, last: date) -> Pause:
+    """Pause ``habit`` from ``first`` to ``last`` (inclusive).
+
+    Overlapping or directly adjacent pauses are merged into one, so the stored
+    ranges never overlap. Returns the resulting (possibly merged) pause.
+    """
+    _check_pause(first, last)
+    with transaction(conn):
+        return _merge_pause(conn, habit.id, first, last)
 
 
 def end_pause(conn: sqlite3.Connection, habit: Habit, day: date) -> Pause | None:
@@ -590,16 +599,20 @@ def export_data(conn: sqlite3.Connection) -> dict[str, Any]:
             if d in notes:
                 entry["notes"] = notes[d]
             completions.append(entry)
-        habits.append(
-            {
-                "name": h.name,
-                "every": h.every,
-                "target": h.target,
-                "archived": h.archived,
-                "created": h.created.isoformat(),
-                "completions": completions,
-            }
-        )
+        habit: dict[str, Any] = {
+            "name": h.name,
+            "every": h.every,
+            "target": h.target,
+            "archived": h.archived,
+            "created": h.created.isoformat(),
+            "completions": completions,
+        }
+        pauses = list_pauses(conn, h)
+        if pauses:  # left out when empty, like a day's notes
+            habit["pauses"] = [
+                {"from": p.first.isoformat(), "to": p.last.isoformat()} for p in pauses
+            ]
+        habits.append(habit)
     return {"format": EXPORT_FORMAT, "version": EXPORT_VERSION, "habits": habits}
 
 
@@ -610,6 +623,7 @@ class ImportResult:
     completions_added: int
     notes_added: int = 0
     notes_skipped: int = 0
+    pauses_added: int = 0
 
 
 def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
@@ -676,6 +690,20 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
                 created = parse_date(created_raw)
             except ValueError as exc:
                 raise HabitlogError(f"{where}: created: {exc}") from None
+        pauses_raw = raw.get("pauses", [])  # absent in exports made before pauses existed
+        if not isinstance(pauses_raw, list):
+            raise HabitlogError(f"{where}: pauses must be a list")
+        pauses: list[Pause] = []
+        for j, p in enumerate(pauses_raw):
+            pwhere = f"{where}.pauses[{j}]"
+            if not isinstance(p, dict):
+                raise HabitlogError(f"{pwhere}: expected an object with 'from' and 'to'")
+            try:
+                first, last = parse_date(p.get("from")), parse_date(p.get("to"))
+                _check_pause(first, last)
+            except (ValueError, HabitlogError) as exc:
+                raise HabitlogError(f"{pwhere}: {exc}") from None
+            pauses.append(Pause(first, last))
         habits.append(
             {
                 "name": name,
@@ -685,6 +713,7 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
                 "created": created,
                 "counts": counts,
                 "notes": notes,
+                "pauses": pauses,
             }
         )
     return habits
@@ -702,9 +731,13 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
     first, then the ones this import adds). A note that finds no free
     completion (the day is fully logged and every completion already has a
     different note) is left out and counted in ``notes_skipped``.
+
+    Pauses are merged with the habit's own (overlapping or adjacent ranges
+    join); one already covered by an existing pause changes nothing and isn't
+    counted in ``pauses_added``.
     """
     habits = _validate_import(data, today)
-    created = existing = added = notes_added = notes_skipped = 0
+    created = existing = added = notes_added = notes_skipped = pauses_added = 0
     with transaction(conn):
         for h in habits:
             row = conn.execute(
@@ -776,4 +809,12 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
                         )
                         notes_added += note is not None
                 notes_skipped += len(new_notes)
-    return ImportResult(created, existing, added, notes_added, notes_skipped)
+            for p in h["pauses"]:
+                covered = conn.execute(
+                    "SELECT 1 FROM pauses WHERE habit_id = ? AND first_day <= ? AND last_day >= ?",
+                    (habit_id, p.first.isoformat(), p.last.isoformat()),
+                ).fetchone()
+                if covered is None:
+                    _merge_pause(conn, habit_id, p.first, p.last)
+                    pauses_added += 1
+    return ImportResult(created, existing, added, notes_added, notes_skipped, pauses_added)
