@@ -24,6 +24,8 @@ class FakeTTY(io.StringIO):
         self._tty = tty
 
     def isatty(self) -> bool:
+        if self.closed:  # like real streams
+            raise ValueError("I/O operation on closed file")
         return self._tty
 
 
@@ -60,7 +62,8 @@ def test_auto_off_when_windows_console_refuses_ansi(monkeypatch):
     assert colors.use_color("auto", FakeTTY(True), {}) is False
 
 
-def test_closed_stream_means_no_colour():
+def test_closed_stream_means_no_colour(monkeypatch):
+    monkeypatch.setattr(colors, "_enable_windows_vt", lambda: True)
     stream = FakeTTY(True)
     stream.close()
     assert colors.use_color("auto", stream, {}) is False
