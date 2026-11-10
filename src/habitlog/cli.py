@@ -686,17 +686,72 @@ def cmd_import(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
     return EXIT_OK
 
 
+def _count_habits(path: Path) -> int | None:
+    """Active habits in a database file, opened read-only; None if unreadable."""
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    try:
+        return conn.execute("SELECT COUNT(*) FROM habits WHERE archived = 0").fetchone()[0]
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def cmd_profiles(args: argparse.Namespace, today: date) -> int:
+    choice = db.choose_db(args.db, args.profile)
+    rows_data = []
+    for name in db.list_profiles():
+        path = db.profile_db_path(name)
+        exists = path.is_file()
+        rows_data.append({
+            "name": name,
+            "path": str(path),
+            "exists": exists,
+            "habits": (_count_habits(path) if exists else 0),
+            "active": choice.profile == name,
+        })
+    if args.json:
+        _print_json({
+            "active": choice.profile,
+            "database": str(choice.path),
+            "source": choice.source,
+            "profiles": rows_data,
+        })
+        return EXIT_OK
+    rows = [["", "PROFILE", "HABITS", "DATABASE"]]
+    for r in rows_data:
+        habits = "?" if r["habits"] is None else str(r["habits"])
+        where = r["path"] if r["exists"] else f"{r['path']} (not created yet)"
+        rows.append(["*" if r["active"] else "", r["name"], habits, where])
+    for line in _table(rows):
+        print(line.rstrip())
+    if choice.profile is None:
+        print(f"Using {choice.path} from {choice.source}, not a profile.")
+    elif choice.source != "default":
+        print(f"Active profile {choice.profile!r} chosen by {choice.source}.")
+    return EXIT_OK
+
+
 # --------------------------------------------------------------------------- parser
 
 
 def build_parser() -> argparse.ArgumentParser:
     db_help = "database file (default: $HABITLOG_DB, else a per-user data folder)"
+    profile_help = (
+        "use the named profile's own database (default: $HABITLOG_PROFILE, else 'default')"
+    )
     color_help = (
         "colour heatmaps and statuses: auto (default; only on a terminal and "
         "when NO_COLOR is not set), always or never"
     )
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", metavar="PATH", default=argparse.SUPPRESS, help=db_help)
+    common.add_argument(
+        "--profile", metavar="NAME", default=argparse.SUPPRESS, help=profile_help
+    )
     common.add_argument(
         "--color", choices=colors.WHEN_CHOICES, default=argparse.SUPPRESS, metavar="WHEN",
         help=color_help,
@@ -707,6 +762,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"habitlog {__version__}")
     parser.add_argument("--db", metavar="PATH", default=None, help=db_help)
+    parser.add_argument("--profile", metavar="NAME", default=None, help=profile_help)
     parser.add_argument(
         "--color", choices=colors.WHEN_CHOICES, default="auto", metavar="WHEN", help=color_help
     )
@@ -817,6 +873,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="include archived habits")
     p.add_argument("--title", help='page title (default "Habit report")')
 
+    p = add("profiles", cmd_profiles, "list profiles and their databases; * marks the active one")
+    p.set_defaults(needs_db=False)
+    p.add_argument("--json", action="store_true")
+
     p = add("export", cmd_export, "export all habits and completions")
     p.add_argument("--format", choices=("json", "csv"), default="json")
     p.add_argument("--output", "-o", metavar="FILE", help="write to FILE instead of stdout")
@@ -833,7 +893,9 @@ def main(argv: Sequence[str] | None = None, *, today: date | None = None) -> int
     today = today or date.today()
     args.color_on = colors.use_color(args.color)
     try:
-        path = db.resolve_db_path(args.db)
+        if not getattr(args, "needs_db", True):
+            return args.func(args, today)
+        path = db.resolve_db_path(args.db, profile=args.profile)
         try:
             conn = db.connect(path)
         except (sqlite3.Error, OSError) as exc:

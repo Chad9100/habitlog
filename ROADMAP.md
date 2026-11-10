@@ -37,7 +37,7 @@ Estimates are rough working hours for one person, including tests and docs.
       code suitable for shell prompts and cron - 1.5 h
 - [ ] Reminder recipes: documented cron / Task Scheduler snippets that call
       `habitlog due` and show a desktop notification - 2 h
-- [ ] Multiple profiles (`--profile work`, `HABITLOG_PROFILE`) mapped to
+- [x] Multiple profiles (`--profile work`, `HABITLOG_PROFILE`) mapped to
       separate database files, plus `habitlog profiles` - 2 h
 - [ ] Pause a habit for a date range (vacation) without breaking its streak - 1.5 h
 

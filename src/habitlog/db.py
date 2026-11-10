@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -43,14 +44,85 @@ def default_db_path(env: Mapping[str, str] | None = None, platform: str | None =
     return Path(base) / "habitlog" / "habitlog.db"
 
 
-def resolve_db_path(cli_value: str | None, env: Mapping[str, str] | None = None) -> Path:
-    """``--db`` wins, then ``HABITLOG_DB``, then the per-user default."""
+DEFAULT_PROFILE = "default"
+_PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
+
+
+def check_profile_name(name: str) -> str:
+    """Return a profile name if it is safe to use as a file name, else raise."""
+    if not _PROFILE_RE.fullmatch(name):
+        raise HabitlogError(
+            f"invalid profile name {name!r}: use 1-40 letters, digits, '-' or '_', "
+            "starting with a letter or digit"
+        )
+    return name
+
+
+def profiles_dir(env: Mapping[str, str] | None = None, platform: str | None = None) -> Path:
+    """Folder holding one database file per named profile."""
+    return default_db_path(env, platform).parent / "profiles"
+
+
+def profile_db_path(
+    name: str, env: Mapping[str, str] | None = None, platform: str | None = None
+) -> Path:
+    """Database file of a profile; ``default`` is the ordinary default database."""
+    check_profile_name(name)
+    if name.lower() == DEFAULT_PROFILE:
+        return default_db_path(env, platform)
+    return profiles_dir(env, platform) / f"{name.lower()}.db"
+
+
+def list_profiles(env: Mapping[str, str] | None = None, platform: str | None = None) -> list[str]:
+    """``default`` plus every profile that has a database file, sorted."""
+    folder = profiles_dir(env, platform)
+    names = set()
+    if folder.is_dir():
+        for p in folder.glob("*.db"):
+            if p.is_file() and _PROFILE_RE.fullmatch(p.stem):
+                names.add(p.stem.lower())
+    names.discard(DEFAULT_PROFILE)
+    return [DEFAULT_PROFILE, *sorted(names)]
+
+
+@dataclass(frozen=True)
+class DbChoice:
+    """Which database to open and why (``profile`` is None for an explicit file)."""
+
+    path: Path
+    profile: str | None
+    source: str  # "--db", "HABITLOG_DB", "--profile", "HABITLOG_PROFILE" or "default"
+
+
+def choose_db(
+    cli_db: str | None,
+    cli_profile: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> DbChoice:
+    """Command-line options beat environment variables; an explicit file beats a
+    profile at the same level: ``--db``, ``--profile``, ``HABITLOG_DB``,
+    ``HABITLOG_PROFILE``, then the default profile."""
     env = os.environ if env is None else env
-    if cli_value:
-        return Path(cli_value).expanduser()
+    if cli_db and cli_profile:
+        raise HabitlogError("use either --db or --profile, not both")
+    if cli_db:
+        return DbChoice(Path(cli_db).expanduser(), None, "--db")
+    if cli_profile:
+        name = check_profile_name(cli_profile).lower()
+        return DbChoice(profile_db_path(name, env), name, "--profile")
     if env.get("HABITLOG_DB"):
-        return Path(env["HABITLOG_DB"]).expanduser()
-    return default_db_path(env)
+        return DbChoice(Path(env["HABITLOG_DB"]).expanduser(), None, "HABITLOG_DB")
+    if env.get("HABITLOG_PROFILE"):
+        name = check_profile_name(env["HABITLOG_PROFILE"]).lower()
+        return DbChoice(profile_db_path(name, env), name, "HABITLOG_PROFILE")
+    return DbChoice(default_db_path(env), DEFAULT_PROFILE, "default")
+
+
+def resolve_db_path(
+    cli_value: str | None, env: Mapping[str, str] | None = None, profile: str | None = None
+) -> Path:
+    """Path of the database to open; see :func:`choose_db` for the order."""
+    return choose_db(cli_value, profile, env).path
 
 
 # --------------------------------------------------------------------------- connection

@@ -40,6 +40,8 @@ scripted (`--json` output, JSON import/export).
   year heatmap per habit (no scripts or external files; works offline).
 - `due`: what is still left to do today or this week, with an exit code for
   shell prompts, cron jobs and scripts (`--quiet`, `--count`, `--json`).
+- Profiles: keep separate sets of habits (work, home, ...) in separate
+  database files with `--profile NAME` or `HABITLOG_PROFILE`; `profiles` lists them.
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -684,6 +686,31 @@ $ habitlog --db fresh.db import backup.json
 Imported: 0 new habits, 1 already present, 0 completions added.
 ```
 
+### Profiles
+
+A profile is a separate database with its own habits. Pick one with
+`--profile NAME` (before or after the command) or the `HABITLOG_PROFILE`
+environment variable; a profile's file is created the first time you use it.
+
+```
+$ habitlog --profile work add Standup
+$ habitlog --profile work add Inbox
+$ habitlog add Walk                      # the default profile
+$ export HABITLOG_PROFILE=work           # PowerShell: $env:HABITLOG_PROFILE = "work"
+$ habitlog profiles
+   PROFILE  HABITS  DATABASE
+   default  1       /home/me/.local/share/habitlog/habitlog.db
+*  work     2       /home/me/.local/share/habitlog/profiles/work.db
+Active profile 'work' chosen by HABITLOG_PROFILE.
+```
+
+Names are 1-40 letters, digits, `-` or `_` and are case-insensitive (`Work`
+and `work` are the same profile). `default` is the ordinary default database.
+`habitlog profiles --json` gives the active profile, the database in use, what
+chose it, and each profile's path, whether its file exists and its number of
+active habits. Listing profiles never creates a database. `--db` and
+`--profile` can't be combined.
+
 ### Colour
 
 `stats`, `month` and `list` can use ANSI colour: heatmap shades go from grey
@@ -714,11 +741,16 @@ least one habit is still due.
 The database is a single SQLite file, chosen in this order:
 
 1. `--db PATH` (before or after the command)
-2. the `HABITLOG_DB` environment variable
-3. the per-user default:
+2. `--profile NAME`
+3. the `HABITLOG_DB` environment variable
+4. the `HABITLOG_PROFILE` environment variable
+5. the per-user default (the `default` profile):
    - Windows: `%APPDATA%\habitlog\habitlog.db`
    - elsewhere: `$XDG_DATA_HOME/habitlog/habitlog.db`, or
      `~/.local/share/habitlog/habitlog.db` if `XDG_DATA_HOME` is unset
+
+Other profiles live in a `profiles` folder next to the default file, e.g.
+`~/.local/share/habitlog/profiles/work.db`.
 
 Parent folders are created as needed. The schema is versioned in a `meta`
 table and upgraded automatically when a newer habitlog opens an older file.
