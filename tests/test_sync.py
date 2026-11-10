@@ -109,3 +109,54 @@ def test_sync_no_conflict_when_settings_match(tmp_path, capsys):
     _main(a, "sync", str(f), capsys=capsys)
     _, out, _ = _main(a, "sync", str(f), capsys=capsys)
     assert "Conflict" not in out
+
+
+def _conflicted(tmp_path, capsys):
+    a, b, f = tmp_path / "a.db", tmp_path / "b.db", tmp_path / "sync.json"
+    _main(a, "add", "Read", capsys=capsys)
+    _main(a, "sync", str(f), capsys=capsys)
+    _main(b, "sync", str(f), capsys=capsys)
+    _main(a, "edit", "Read", "--target", "3", "--every", "weekly", capsys=capsys)
+    _main(a, "archive", "Read", capsys=capsys)
+    _main(a, "sync", str(f), capsys=capsys)
+    return a, b, f
+
+
+def test_sync_prefer_file_applies_file_settings(tmp_path, capsys):
+    _, b, f = _conflicted(tmp_path, capsys)
+    before = f.read_text(encoding="utf-8")
+    code, out, _ = _main(b, "sync", str(f), "--prefer", "file", capsys=capsys)
+    assert code == 0
+    assert "Conflict: 'Read' every was daily here but weekly in the file; changed to weekly." in out
+    assert "target was 1 here but 3 in the file; changed to 3." in out
+    assert "archived was False here but True in the file; changed to True." in out
+    assert f.read_text(encoding="utf-8") == before
+    item = json.loads(_main(b, "export", capsys=capsys)[1])["habits"][0]
+    assert (item["every"], item["target"], item["archived"]) == ("weekly", 3, True)
+    _, out, _ = _main(b, "sync", str(f), "--prefer", "file", capsys=capsys)
+    assert "Conflict" not in out
+
+
+def test_sync_prefer_local_overwrites_file(tmp_path, capsys):
+    _, b, f = _conflicted(tmp_path, capsys)
+    _main(b, "sync", str(f), "--prefer", "local", capsys=capsys)
+    item = json.loads(f.read_text(encoding="utf-8"))["habits"][0]
+    assert (item["every"], item["target"], item["archived"]) == ("daily", 1, False)
+
+
+def test_sync_prefer_file_dry_run_changes_nothing(tmp_path, capsys):
+    _, b, f = _conflicted(tmp_path, capsys)
+    code, out, _ = _main(b, "sync", str(f), "--prefer", "file", "--dry-run", capsys=capsys)
+    assert code == 0 and "would change to weekly" in out
+    item = json.loads(_main(b, "export", capsys=capsys)[1])["habits"][0]
+    assert (item["every"], item["target"], item["archived"]) == ("daily", 1, False)
+
+
+def test_sync_prefer_rejects_other_values(tmp_path, capsys):
+    a = tmp_path / "a.db"
+    try:
+        _main(a, "sync", str(tmp_path / "s.json"), "--prefer", "both", capsys=capsys)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected argparse to reject --prefer both")

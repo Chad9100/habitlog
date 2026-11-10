@@ -835,6 +835,19 @@ Dry run for s.json: would pull 0 new habits, 0 completions, 0 notes, 0 pauses; f
 Conflict: 'Read' target is 1 here but 3 in the file; kept 1.
 ```
 
+`--prefer file` settles conflicts the other way: the file's `every`, `target`
+and `archived` replace this database's, and each change is reported. The
+default is `--prefer local`. It combines with `--dry-run`.
+
+```
+$ habitlog --db b.db sync s.json --prefer file --dry-run
+Dry run for s.json: would pull 0 new habits, 0 completions, 0 notes, 0 pauses; file already up to date.
+Conflict: 'Read' target was 1 here but 3 in the file; would change to 3.
+$ habitlog --db b.db sync s.json --prefer file
+Synced with s.json: pulled 0 new habits, 0 completions, 0 notes, 0 pauses; file already up to date.
+Conflict: 'Read' target was 1 here but 3 in the file; changed to 3.
+```
+
 Sync only adds: a completion you undo, or a habit you remove, comes back at the
 next sync from any copy that still has it. Propagating deletions is planned.
 

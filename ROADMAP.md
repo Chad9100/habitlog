@@ -55,7 +55,7 @@ Estimates are rough working hours for one person, including tests and docs.
       (additive only; deletions are the next item) - 1.5 h
 - [x] `sync --dry-run` preview, and report (keep local, list differences) when
       every/target/archived differ between copies (split from the item below) - 1 h
-- [ ] Choose a winner for setting conflicts (`--prefer file|local`) instead of
+- [x] Choose a winner for setting conflicts (`--prefer file|local`) instead of
       always keeping the local value - 0.5 h
 - [ ] Track deletions/undos in the sync file so they propagate instead of being
       re-imported - 2 h

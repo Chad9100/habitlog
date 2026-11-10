@@ -721,7 +721,9 @@ def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
     return habits
 
 
-def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResult:
+def import_data(
+    conn: sqlite3.Connection, data: Any, today: date, prefer: str = "local"
+) -> ImportResult:
     """Merge an export into the database.
 
     Habits are matched by case-insensitive name; existing habits keep their own
@@ -740,7 +742,11 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
 
     When an existing habit's every/target/archived differ from the import,
     the local value is kept and the difference is listed in ``conflicts``.
+    With ``prefer="file"`` the imported value replaces the local one instead
+    (the differences are still listed, as (name, setting, old, new)).
     """
+    if prefer not in ("local", "file"):
+        raise HabitlogError(f"prefer must be 'local' or 'file', not {prefer!r}")
     habits = _validate_import(data, today)
     created = existing = added = notes_added = notes_skipped = pauses_added = 0
     conflicts: list[tuple[str, str, Any, Any]] = []
@@ -774,6 +780,12 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
                 ):
                     if local != theirs:
                         conflicts.append((row["name"], field, local, theirs))
+                        if prefer == "file":
+                            value = int(theirs) if field == "archived" else theirs
+                            conn.execute(
+                                f"UPDATE habits SET {field} = ? WHERE id = ?",  # field is a literal above
+                                (value, habit_id),
+                            )
             have = {
                 r["day"]: int(r["total"])
                 for r in conn.execute(

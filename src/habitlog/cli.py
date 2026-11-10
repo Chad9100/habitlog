@@ -812,7 +812,7 @@ def cmd_sync(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
             target.row_factory = sqlite3.Row
             conn.backup(target)
         try:
-            result = db.import_data(target, before, today)
+            result = db.import_data(target, before, today, prefer=args.prefer)
             merged = db.export_data(target)
         finally:
             if target is not conn:
@@ -847,7 +847,11 @@ def cmd_sync(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
             + (tail if changed else "file already up to date.")
         )
         for name, field, local, theirs in result.conflicts:
-            print(f"Conflict: '{name}' {field} is {local} here but {theirs} in the file; kept {local}.")
+            if args.prefer == "file":
+                verb = "would change" if args.dry_run else "changed"
+                print(f"Conflict: '{name}' {field} was {local} here but {theirs} in the file; {verb} to {theirs}.")
+            else:
+                print(f"Conflict: '{name}' {field} is {local} here but {theirs} in the file; kept {local}.")
     return EXIT_OK
 
 
@@ -1072,6 +1076,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("sync", cmd_sync, "merge with a JSON file in both directions (e.g. a synced folder)")
     p.add_argument("file", help="sync file; created if it does not exist")
     p.add_argument("--dry-run", action="store_true", help="show what would change; save nothing")
+    p.add_argument(
+        "--prefer",
+        choices=("local", "file"),
+        default="local",
+        help="which side wins when every/target/archived differ (default: local)",
+    )
     return parser
 
 
