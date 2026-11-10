@@ -141,6 +141,78 @@ def cmd_rename(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
     return EXIT_OK
 
 
+def _settings_text(every: str, target: int) -> str:
+    per = {"daily": "day", "weekdays": "weekday", "weekly": "week"}[every]
+    return f"{every}, {_plural(target, 'time')} per {per}"
+
+
+def _streak_pair(counts: dict[date, int], every: str, target: int, today: date) -> dict[str, Any]:
+    return {
+        "every": every,
+        "target": target,
+        "current_streak": streaks.current_streak(counts, every, target, today),
+        "longest_streak": streaks.longest_streak(counts, every, target, today),
+        "streak_unit": streaks.streak_unit(every),
+    }
+
+
+def cmd_edit(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    """Change --every/--target. There is one setting per habit, so the whole
+    history is re-evaluated with the new rule; completions are never changed."""
+    if args.every is None and args.target is None:
+        raise HabitlogError("nothing to change; pass --every and/or --target")
+    habit = db.get_habit(conn, args.name)
+    every = args.every or habit.every
+    target = habit.target if args.target is None else args.target
+    counts = db.completion_counts(conn, habit)
+    before = _streak_pair(counts, habit.every, habit.target, today)
+    after = _streak_pair(counts, every, target, today)
+    changed = (every, target) != (habit.every, habit.target)
+    ignored = 0
+    if every == "weekdays" and habit.every != "weekdays":
+        ignored = sum(c for d, c in counts.items() if not streaks.is_weekday(d))
+    if changed and not args.dry_run:
+        db.update_habit(conn, habit, every, target)
+
+    if args.json:
+        _print_json(
+            {
+                "name": habit.name,
+                "changed": changed,
+                "dry_run": args.dry_run,
+                "before": before,
+                "after": after,
+                "weekend_completions_ignored": ignored,
+            }
+        )
+        return EXIT_OK
+    if not changed:
+        print(f"'{habit.name}' is already {_settings_text(every, target)}; nothing changed.")
+        return EXIT_OK
+    verb = "Would change" if args.dry_run else "Changed"
+    print(
+        f"{verb} '{habit.name}' from {_settings_text(habit.every, habit.target)} "
+        f"to {_settings_text(every, target)}."
+    )
+    rows = [["", "BEFORE", "AFTER"]]
+    for label, key in (("Current streak", "current_streak"), ("Longest streak", "longest_streak")):
+        rows.append(
+            [
+                f"  {label}",
+                _plural(before[key], before["streak_unit"]),
+                _plural(after[key], after["streak_unit"]),
+            ]
+        )
+    for line in _table(rows):
+        print(line)
+    print("Past completions are kept as logged and re-evaluated with the new settings.")
+    if ignored:
+        print(f"{_plural(ignored, 'completion')} on weekends no longer count towards streaks.")
+    if args.dry_run:
+        print("Dry run: nothing was saved.")
+    return EXIT_OK
+
+
 def cmd_archive(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
     habit = db.get_habit(conn, args.name)
     if habit.archived:
@@ -508,6 +580,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("rename", cmd_rename, "rename a habit")
     p.add_argument("old")
     p.add_argument("new")
+
+    p = add("edit", cmd_edit, "change a habit's frequency or target (re-evaluates its history)")
+    p.add_argument("name")
+    p.add_argument("--every", choices=streaks.FREQUENCIES, default=None)
+    p.add_argument("--target", type=_positive_int, default=None, help="times per period")
+    p.add_argument(
+        "--dry-run", action="store_true", help="show how the streaks would change, save nothing"
+    )
+    p.add_argument("--json", action="store_true")
 
     p = add("archive", cmd_archive, "hide a habit but keep its history")
     p.add_argument("name")

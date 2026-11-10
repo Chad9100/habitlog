@@ -33,6 +33,9 @@ scripted (`--json` output, JSON import/export).
   note (`--since`, `--limit`, `--json`).
 - `month`: a calendar of one habit for a month, or a one-line-per-habit
   overview of the month with how many periods were met (`--month YYYY-MM`).
+- `edit`: change a habit's frequency or target later; the whole history is
+  re-evaluated with the new settings and the streak change is shown before and
+  after (`--dry-run` previews it without saving).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -447,6 +450,55 @@ habitlog remove NAME --yes   # deletes the habit and its history
 $ habitlog remove Guitar
 habitlog: error: refusing to delete 'Guitar' and all its history without --yes (use 'habitlog archive' to just hide it)
 ```
+
+### Editing a habit
+
+```
+habitlog edit NAME [--every daily|weekdays|weekly] [--target N] [--dry-run] [--json]
+```
+
+A habit has one frequency and one target, so the rule is simple: after an
+edit, **all** past completions are re-evaluated with the new settings, as if
+the habit had always been set up that way. Completions themselves are never
+changed or deleted, so an edit is fully reversible: editing back restores the
+old streaks exactly. `edit` prints the current and longest streak before and
+after, and `--dry-run` shows that without saving anything. Switching to
+`weekdays` reports how many weekend completions stop counting (they stay in
+the database and in exports).
+
+Captured on Monday 2026-11-09 from a separate made-up database: a daily
+`Stretch` habit logged every day since 26 October except the 28th.
+
+```
+$ habitlog list
+HABIT    EVERY  TARGET  TODAY  STREAK  BEST
+Stretch  daily  1       done   12d     12d
+$ habitlog edit Stretch --every weekdays --dry-run
+Would change 'Stretch' from daily, 1 time per day to weekdays, 1 time per weekday.
+                  BEFORE   AFTER
+  Current streak  12 days  8 days
+  Longest streak  12 days  8 days
+Past completions are kept as logged and re-evaluated with the new settings.
+4 completions on weekends no longer count towards streaks.
+Dry run: nothing was saved.
+$ habitlog edit Stretch --every weekly --target 4
+Changed 'Stretch' from daily, 1 time per day to weekly, 4 times per week.
+                  BEFORE   AFTER
+  Current streak  12 days  2 weeks
+  Longest streak  12 days  2 weeks
+Past completions are kept as logged and re-evaluated with the new settings.
+$ habitlog list
+HABIT    EVERY   TARGET  TODAY          STREAK  BEST
+Stretch  weekly  4       1/4 this week  2w      2w
+$ habitlog edit Stretch --target 4
+'Stretch' is already weekly, 4 times per week; nothing changed.
+$ habitlog edit Stretch
+habitlog: error: nothing to change; pass --every and/or --target
+```
+
+`edit --json` returns `name`, `changed`, `dry_run`, `before` and `after`
+(each with `every`, `target`, `current_streak`, `longest_streak`,
+`streak_unit`) and `weekend_completions_ignored`.
 
 ### Export and import
 

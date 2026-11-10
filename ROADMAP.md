@@ -19,7 +19,7 @@ Estimates are rough working hours for one person, including tests and docs.
       `stats` and included in export/import (schema migration 2) - 3 h
 - [x] `habitlog log NAME` to list recent completions with dates, counts and notes - 1.5 h
 - [x] Monthly calendar view: `habitlog month [NAME] [--month 2026-11]` - 2.5 h
-- [ ] `habitlog edit NAME --target/--every` with clear rules for how past streaks
+- [x] `habitlog edit NAME --target/--every` with clear rules for how past streaks
       are recalculated - 1 h
 
 ## v0.3 - Reports (about 6 h)

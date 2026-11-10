@@ -255,6 +255,26 @@ def rename_habit(conn: sqlite3.Connection, old: str, new: str) -> Habit:
     return get_habit(conn, new)
 
 
+def update_habit(
+    conn: sqlite3.Connection, habit: Habit, every: str | None = None, target: int | None = None
+) -> Habit:
+    """Change a habit's frequency and/or target; ``None`` keeps the current value.
+
+    Only the habit row changes. Completions are never touched, so an edit is
+    reversible: editing back restores the previous streaks exactly.
+    """
+    if every is not None and every not in FREQUENCIES:
+        raise HabitlogError(f"unknown frequency '{every}'")
+    if target is not None and target < 1:
+        raise HabitlogError("target must be at least 1")
+    with transaction(conn):
+        conn.execute(
+            "UPDATE habits SET every = ?, target = ? WHERE id = ?",
+            (every or habit.every, habit.target if target is None else target, habit.id),
+        )
+    return get_habit(conn, habit.name)
+
+
 def set_archived(conn: sqlite3.Connection, habit: Habit, archived: bool) -> None:
     with transaction(conn):
         conn.execute("UPDATE habits SET archived = ? WHERE id = ?", (int(archived), habit.id))
