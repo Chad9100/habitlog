@@ -17,7 +17,7 @@ RESET = "\033[0m"
 # Heatmap shades by level (0 none .. 3 target met): grey, then three greens.
 SHADE_STYLES = ("90", "2;32", "32", "1;32")
 # list TODAY column.
-STATUS_STYLES = {"done": "1;32", "rest": "90", "partial": "33"}
+STATUS_STYLES = {"done": "1;32", "rest": "90", "partial": "33", "paused": "36"}
 
 
 def paint(text: str, style: str | None) -> str:

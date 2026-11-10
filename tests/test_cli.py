@@ -233,7 +233,7 @@ def test_stats_json_shape(run):
     assert set(s) == {
         "name", "every", "target", "archived", "weeks", "window_start", "window_end",
         "periods_total", "periods_met", "completion_rate", "current_streak",
-        "longest_streak", "streak_unit", "total_completions", "days", "notes",
+        "longest_streak", "streak_unit", "total_completions", "days", "notes", "pauses",
     }
     # Window starts at the first completion (habit created "today" but backfilled).
     assert s["window_start"] == "2026-02-25" and s["window_end"] == "2026-03-04"

@@ -133,7 +133,7 @@ def test_migration_2_keeps_v1_data_and_adds_notes(tmp_path):
 
     conn = db.connect(path)
     try:
-        assert db.get_schema_version(conn) == 2
+        assert db.get_schema_version(conn) == db.SCHEMA_VERSION
         h = db.get_habit(conn, "read")
         assert db.completion_counts(conn, h) == {date(2026, 3, 2): 2}
         assert db.completion_notes(conn, h) == []

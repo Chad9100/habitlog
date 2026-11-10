@@ -7,7 +7,7 @@ import csv
 import json
 import sqlite3
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
@@ -113,8 +113,8 @@ def _status_style(progress: streaks.Progress) -> str:
 
 
 def _status_text(habit: Habit, progress: streaks.Progress) -> str:
-    if progress.status == "rest":
-        return "rest"
+    if progress.status in ("rest", "paused"):
+        return progress.status
     if progress.status == "done":
         return "done"
     count = progress.period_count or 0
@@ -127,15 +127,20 @@ def _status_text(habit: Habit, progress: streaks.Progress) -> str:
 
 def _habit_summary(conn: sqlite3.Connection, habit: Habit, today: date) -> dict[str, Any]:
     counts = db.completion_counts(conn, habit)
-    progress = streaks.today_progress(counts, habit.every, habit.target, today)
+    paused = db.paused_days(conn, habit)
+    progress = streaks.today_progress(counts, habit.every, habit.target, today, paused)
     return {
         "name": habit.name,
         "every": habit.every,
         "target": habit.target,
         "archived": habit.archived,
         "today": {"status": progress.status, "period_count": progress.period_count},
-        "current_streak": streaks.current_streak(counts, habit.every, habit.target, today),
-        "longest_streak": streaks.longest_streak(counts, habit.every, habit.target, today),
+        "current_streak": streaks.current_streak(
+            counts, habit.every, habit.target, today, paused
+        ),
+        "longest_streak": streaks.longest_streak(
+            counts, habit.every, habit.target, today, paused
+        ),
         "streak_unit": streaks.streak_unit(habit.every),
         "_progress": progress,
     }
@@ -163,12 +168,14 @@ def _settings_text(every: str, target: int) -> str:
     return f"{every}, {_plural(target, 'time')} per {per}"
 
 
-def _streak_pair(counts: dict[date, int], every: str, target: int, today: date) -> dict[str, Any]:
+def _streak_pair(
+    counts: dict[date, int], every: str, target: int, today: date, paused: frozenset[date]
+) -> dict[str, Any]:
     return {
         "every": every,
         "target": target,
-        "current_streak": streaks.current_streak(counts, every, target, today),
-        "longest_streak": streaks.longest_streak(counts, every, target, today),
+        "current_streak": streaks.current_streak(counts, every, target, today, paused),
+        "longest_streak": streaks.longest_streak(counts, every, target, today, paused),
         "streak_unit": streaks.streak_unit(every),
     }
 
@@ -182,8 +189,9 @@ def cmd_edit(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
     every = args.every or habit.every
     target = habit.target if args.target is None else args.target
     counts = db.completion_counts(conn, habit)
-    before = _streak_pair(counts, habit.every, habit.target, today)
-    after = _streak_pair(counts, every, target, today)
+    paused = db.paused_days(conn, habit)
+    before = _streak_pair(counts, habit.every, habit.target, today, paused)
+    after = _streak_pair(counts, every, target, today, paused)
     changed = (every, target) != (habit.every, habit.target)
     ignored = 0
     if every == "weekdays" and habit.every != "weekdays":
@@ -270,7 +278,9 @@ def cmd_done(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
         raise HabitlogError(f"'{habit.name}' is archived; unarchive it first")
     db.add_completion(conn, habit, day, args.count, args.note)
     counts = db.completion_counts(conn, habit)
-    streak = streaks.current_streak(counts, habit.every, habit.target, today)
+    streak = streaks.current_streak(
+        counts, habit.every, habit.target, today, db.paused_days(conn, habit)
+    )
     unit = streaks.streak_unit(habit.every)
     print(
         f"Logged '{habit.name}' on {day.isoformat()} "
@@ -290,6 +300,72 @@ def cmd_undo(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
         f"Removed the last completion of '{habit.name}' on {day.isoformat()} "
         f"(-{removed}, {left} left that day)."
     )
+    return EXIT_OK
+
+
+def _pause_text(p: db.Pause) -> str:
+    if p.first == p.last:
+        return f"{p.first.isoformat()} (1 day)"
+    return f"{p.first.isoformat()} to {p.last.isoformat()} ({_plural(p.days, 'day')})"
+
+
+def _pause_json(p: db.Pause) -> dict[str, Any]:
+    return {"from": p.first.isoformat(), "to": p.last.isoformat(), "days": p.days}
+
+
+def cmd_pause(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    """Pause a habit for a date range, or list its pauses with --list."""
+    habit = db.get_habit(conn, args.name)
+    if args.list:
+        if args.start is not None:
+            raise HabitlogError("--from cannot be combined with --list")
+        pauses = db.list_pauses(conn, habit)
+        if args.json:
+            _print_json({"name": habit.name, "pauses": [_pause_json(p) for p in pauses]})
+            return EXIT_OK
+        if not pauses:
+            print(f"'{habit.name}' has no pauses.")
+            return EXIT_OK
+        print(f"Pauses of '{habit.name}':")
+        for p in pauses:
+            state = " (now)" if p.first <= today <= p.last else ""
+            print(f"  {_pause_text(p)}{state}")
+        return EXIT_OK
+    if args.to is None and args.days is None:
+        raise HabitlogError("say how long to pause: --to DATE, --days N (or --list to show pauses)")
+    if habit.archived:
+        raise HabitlogError(f"'{habit.name}' is archived; unarchive it first")
+    first = args.start or today
+    last = args.to if args.to is not None else first + timedelta(days=args.days - 1)
+    pause = db.add_pause(conn, habit, first, last)
+    if args.json:
+        _print_json({"name": habit.name, "pause": _pause_json(pause)})
+        return EXIT_OK
+    print(
+        f"Paused '{habit.name}' {'on' if pause.days == 1 else 'from'} {_pause_text(pause)}. "
+        "Missed days in a pause don't break the streak; completions still count."
+    )
+    return EXIT_OK
+
+
+def cmd_unpause(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
+    """End the current or next pause (or remove all of them with --all)."""
+    habit = db.get_habit(conn, args.name)
+    if args.all:
+        n = db.clear_pauses(conn, habit)
+        print(f"Removed {_plural(n, 'pause')} of '{habit.name}'.")
+        return EXIT_OK
+    day = args.date or today
+    old = db.end_pause(conn, habit, day)
+    if old is None:
+        raise HabitlogError(f"'{habit.name}' has no pause on or after {day.isoformat()}")
+    if old.first < day:
+        print(
+            f"Ended the pause of '{habit.name}' that began {old.first.isoformat()}; "
+            f"it now ends {(day - timedelta(days=1)).isoformat()}."
+        )
+    else:
+        print(f"Removed the pause of '{habit.name}': {_pause_text(old)}.")
     return EXIT_OK
 
 
@@ -331,10 +407,14 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     elif args.weeks is None:
         args.weeks = 12
     counts = db.completion_counts(conn, habit)
+    paused = db.paused_days(conn, habit)
     since = min([habit.created, *counts]) if counts else habit.created
-    rate = streaks.completion_rate(counts, habit.every, habit.target, today, args.weeks, since)
-    current = streaks.current_streak(counts, habit.every, habit.target, today)
-    longest = streaks.longest_streak(counts, habit.every, habit.target, today)
+    rate = streaks.completion_rate(
+        counts, habit.every, habit.target, today, args.weeks, since, paused
+    )
+    current = streaks.current_streak(counts, habit.every, habit.target, today, paused)
+    longest = streaks.longest_streak(counts, habit.every, habit.target, today, paused)
+    pauses = [p for p in db.list_pauses(conn, habit) if p.last >= rate.start]
     unit = streaks.streak_unit(habit.every)
     window_start = streaks.week_start(today) - streaks.ONE_WEEK * (args.weeks - 1)
     in_window = {d: c for d, c in counts.items() if window_start <= d <= today}
@@ -359,6 +439,7 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
                 "total_completions": sum(counts.values()),
                 "days": {d.isoformat(): in_window[d] for d in sorted(in_window)},
                 "notes": [{"date": d.isoformat(), "note": n} for d, n in notes],
+                "pauses": [_pause_json(p) for p in pauses],
             }
         )
         return EXIT_OK
@@ -373,8 +454,10 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
         f"  Current streak: {_plural(current, unit)}",
         f"  Longest streak: {_plural(longest, unit)}",
         f"  Total completions: {sum(counts.values())}",
-        "",
     ]
+    if pauses:
+        lines.append("  Paused: " + ", ".join(_pause_text(p) for p in pauses))
+    lines.append("")
     for line in lines:
         print(line)
     use_ascii = args.ascii or not can_encode("".join(heatmap.UNICODE_CHARS))
@@ -436,13 +519,16 @@ def cmd_log(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     return EXIT_OK
 
 
-def _due_entry(habit: Habit, counts: dict[date, int], today: date) -> dict[str, Any] | None:
-    """What is left to do for ``habit`` in today's open period, or ``None`` if nothing."""
+def _due_entry(
+    habit: Habit, counts: dict[date, int], today: date, paused: frozenset[date] = frozenset()
+) -> dict[str, Any] | None:
+    """What is left to do for ``habit`` in today's open period, or ``None`` if nothing
+    (met, a weekend for a weekday habit, or paused)."""
     period = streaks.open_period(today, habit.every)
     if period is None:  # weekend for a weekday habit
         return None
     count = streaks.period_totals(counts, habit.every).get(period, 0)
-    if count >= habit.target:
+    if count >= habit.target or streaks.is_paused(period, habit.every, paused):
         return None
     weekly = habit.every == "weekly"
     return {
@@ -463,7 +549,7 @@ def cmd_due(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     habits = db.list_habits(conn, include_archived=False)
     due = []
     for h in habits:
-        entry = _due_entry(h, db.completion_counts(conn, h), today)
+        entry = _due_entry(h, db.completion_counts(conn, h), today, db.paused_days(conn, h))
         if entry is not None:
             due.append(entry)
     code = EXIT_DUE if due else EXIT_OK
@@ -496,11 +582,14 @@ def cmd_due(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> 
     return code
 
 
-def _month_rate(habit: Habit, counts: dict[date, int], month: date, today: date) -> streaks.Rate:
+def _month_rate(
+    habit: Habit, counts: dict[date, int], month: date, today: date, paused: frozenset[date]
+) -> streaks.Rate:
     """Periods met in ``month`` (up to today), counted from when the habit started."""
     since = min([habit.created, *counts]) if counts else habit.created
     return streaks.rate_between(
-        counts, habit.every, habit.target, max(month, since), streaks.month_end(month), today
+        counts, habit.every, habit.target, max(month, since), streaks.month_end(month), today,
+        paused,
     )
 
 
@@ -540,7 +629,7 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     data = []
     for h in habits:
         counts = db.completion_counts(conn, h)
-        data.append((h, counts, _month_rate(h, counts, month, today)))
+        data.append((h, counts, _month_rate(h, counts, month, today, db.paused_days(conn, h))))
 
     if args.json:
         payload = {
@@ -595,6 +684,7 @@ def cmd_report(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
     reports = []
     for h in habits:
         counts = db.completion_counts(conn, h)
+        paused = db.paused_days(conn, h)
         since = min([h.created, *counts]) if counts else h.created
         notes: dict[date, list[str]] = {}
         for d, note in db.completion_notes(conn, h, first, today):
@@ -607,10 +697,10 @@ def cmd_report(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
                 archived=h.archived,
                 counts=counts,
                 rate=streaks.rate_between(
-                    counts, h.every, h.target, max(first, since), today, today
+                    counts, h.every, h.target, max(first, since), today, today, paused
                 ),
-                current_streak=streaks.current_streak(counts, h.every, h.target, today),
-                longest_streak=streaks.longest_streak(counts, h.every, h.target, today),
+                current_streak=streaks.current_streak(counts, h.every, h.target, today, paused),
+                longest_streak=streaks.longest_streak(counts, h.every, h.target, today, paused),
                 notes=notes,
             )
         )
@@ -810,6 +900,26 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("undo", cmd_undo, "remove the most recent completion for a date")
     p.add_argument("name")
     p.add_argument("--date", type=_date_arg, help="YYYY-MM-DD (default: today)")
+
+    p = add("pause", cmd_pause, "pause a habit for a date range without breaking its streak")
+    p.add_argument("name")
+    p.add_argument(
+        "--from", dest="start", type=_date_arg, metavar="DATE",
+        help="first paused day, YYYY-MM-DD (default: today)",
+    )
+    span = p.add_mutually_exclusive_group()
+    span.add_argument("--to", type=_date_arg, metavar="DATE", help="last paused day (inclusive)")
+    span.add_argument("--days", type=_positive_int, metavar="N", help="pause for N days")
+    span.add_argument("--list", action="store_true", help="show the habit's pauses")
+    p.add_argument("--json", action="store_true")
+
+    p = add("unpause", cmd_unpause, "end a habit's current or next pause")
+    p.add_argument("name")
+    p.add_argument(
+        "--date", type=_date_arg,
+        help="first day back, YYYY-MM-DD (default: today); a pause starting then is removed",
+    )
+    p.add_argument("--all", action="store_true", help="remove every pause of the habit")
 
     p = add("list", cmd_list, "show habits with today's status and streaks")
     p.add_argument("--all", action="store_true", help="include archived habits")

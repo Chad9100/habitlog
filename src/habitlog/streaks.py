@@ -18,6 +18,12 @@ Frequencies:
 A period is *met* when its total count reaches the habit's target. The period
 containing ``today`` is still open: if it is not met yet, it is skipped instead
 of breaking the streak, so the current streak counts up to the last full period.
+
+Pauses: the streak functions take an optional ``paused`` collection of days
+(vacation, illness). A period that is paused and not met is skipped the same
+way: it neither breaks nor extends a streak and is left out of rates. A daily
+or weekday period is paused when its day is; a weekly period is paused when any
+of its days is. A paused period that is met anyway still counts as met.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Iterator, Mapping
+from typing import Collection, Iterator, Mapping
 
 FREQUENCIES = ("daily", "weekdays", "weekly")
 
@@ -136,8 +142,26 @@ def iter_periods(start: date, end: date, every: str) -> Iterator[date]:
         d += ONE_DAY
 
 
-def current_streak(counts: Mapping[date, int], every: str, target: int, today: date) -> int:
-    """Number of consecutive met periods ending at the current or last full period."""
+def is_paused(p: date, every: str, paused: Collection[date] | None) -> bool:
+    """Whether the period starting at ``p`` overlaps a paused day."""
+    if not paused:
+        return False
+    if every == "weekly":
+        return any(p + timedelta(days=i) in paused for i in range(7))
+    return p in paused
+
+
+def current_streak(
+    counts: Mapping[date, int],
+    every: str,
+    target: int,
+    today: date,
+    paused: Collection[date] | None = None,
+) -> int:
+    """Number of consecutive met periods ending at the current or last full period.
+
+    Unmet periods that are paused are skipped instead of ending the streak.
+    """
     totals = period_totals(counts, every)
     p = open_period(today, every)
     if p is None:
@@ -146,22 +170,40 @@ def current_streak(counts: Mapping[date, int], every: str, target: int, today: d
         # Today's period is still open; don't let it break the streak.
         p = previous_period(p, every)
     streak = 0
-    while totals.get(p, 0) >= target:
-        streak += 1
+    while True:
+        if totals.get(p, 0) >= target:
+            streak += 1
+        elif not is_paused(p, every, paused):
+            break
         p = previous_period(p, every)
     return streak
 
 
+def _bridged(prev: date, p: date, every: str, paused: Collection[date] | None) -> bool:
+    """Whether every period strictly between ``prev`` and ``p`` is paused."""
+    q = previous_period(p, every)
+    while q > prev:
+        if not is_paused(q, every, paused):
+            return False
+        q = previous_period(q, every)
+    return q == prev
+
+
 def longest_streak(
-    counts: Mapping[date, int], every: str, target: int, today: date | None = None
+    counts: Mapping[date, int],
+    every: str,
+    target: int,
+    today: date | None = None,
+    paused: Collection[date] | None = None,
 ) -> int:
-    """Longest run of consecutive met periods ever (ignoring periods after ``today``)."""
+    """Longest run of consecutive met periods ever (ignoring periods after ``today``);
+    paused periods between two met ones don't break the run."""
     totals = period_totals(counts, every)
     met = sorted(p for p, t in totals.items() if t >= target and (today is None or p <= today))
     best = run = 0
     prev: date | None = None
     for p in met:
-        run = run + 1 if prev is not None and previous_period(p, every) == prev else 1
+        run = run + 1 if prev is not None and _bridged(prev, p, every, paused) else 1
         best = max(best, run)
         prev = p
     return best
@@ -172,20 +214,29 @@ class Progress:
     """How far along the open period is.
 
     ``status`` is ``"done"`` (target met), ``"partial"`` (some, not enough),
-    ``"open"`` (nothing yet) or ``"rest"`` (weekend for a weekday habit).
+    ``"open"`` (nothing yet), ``"rest"`` (weekend for a weekday habit) or
+    ``"paused"`` (the open period is paused and not met).
     """
 
     period_count: int | None
     status: str
 
 
-def today_progress(counts: Mapping[date, int], every: str, target: int, today: date) -> Progress:
+def today_progress(
+    counts: Mapping[date, int],
+    every: str,
+    target: int,
+    today: date,
+    paused: Collection[date] | None = None,
+) -> Progress:
     p = open_period(today, every)
     if p is None:
         return Progress(None, "rest")
     c = period_totals(counts, every).get(p, 0)
     if c >= target:
         return Progress(c, "done")
+    if is_paused(p, every, paused):
+        return Progress(c, "paused")
     return Progress(c, "partial" if c > 0 else "open")
 
 
@@ -210,6 +261,7 @@ def completion_rate(
     today: date,
     weeks: int,
     since: date | None = None,
+    paused: Collection[date] | None = None,
 ) -> Rate:
     """Share of met periods over the last ``weeks`` calendar weeks.
 
@@ -223,7 +275,7 @@ def completion_rate(
     start = week_start(today) - ONE_WEEK * (weeks - 1)
     if since is not None and since > start:
         start = min(since, today)
-    return rate_between(counts, every, target, start, today, today)
+    return rate_between(counts, every, target, start, today, today, paused)
 
 
 def rate_between(
@@ -233,6 +285,7 @@ def rate_between(
     start: date,
     end: date,
     today: date,
+    paused: Collection[date] | None = None,
 ) -> Rate:
     """Share of met periods from the period containing ``start`` up to ``end``.
 
@@ -240,7 +293,7 @@ def rate_between(
     containing ``today``) only counts once it is met. For weekly habits every
     ISO week that overlaps ``start..end`` is a period, even if it begins
     before ``start``. ``end`` is clamped to ``today``; if ``start`` is after
-    ``end`` the result has no periods.
+    ``end`` the result has no periods. Unmet paused periods are left out.
     """
     end = min(end, today)
     totals = period_totals(counts, every)
@@ -249,7 +302,7 @@ def rate_between(
     if start <= end:
         for p in iter_periods(start, end, every):
             ok = totals.get(p, 0) >= target
-            if p == current and not ok:
+            if not ok and (p == current or is_paused(p, every, paused)):
                 continue
             total += 1
             met += ok

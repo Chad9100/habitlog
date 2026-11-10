@@ -42,6 +42,8 @@ scripted (`--json` output, JSON import/export).
   shell prompts, cron jobs and scripts (`--quiet`, `--count`, `--json`).
 - Profiles: keep separate sets of habits (work, home, ...) in separate
   database files with `--profile NAME` or `HABITLOG_PROFILE`; `profiles` lists them.
+- `pause`: pause a habit for a date range (vacation, illness) so missed days
+  don't break its streak or lower its completion rate; `unpause` ends it early.
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
@@ -642,6 +644,61 @@ habitlog: error: nothing to change; pass --every and/or --target
 `edit --json` returns `name`, `changed`, `dry_run`, `before` and `after`
 (each with `every`, `target`, `current_streak`, `longest_streak`,
 `streak_unit`) and `weekend_completions_ignored`.
+
+### Pausing a habit
+
+```
+habitlog pause NAME [--from DATE] (--to DATE | --days N) [--json]
+habitlog pause NAME --list [--json]
+habitlog unpause NAME [--date DATE] [--all]
+```
+
+A pause is an inclusive range of days (from today unless `--from` says
+otherwise; at most 366 days, archive the habit for longer). It can be in the
+past, to forgive a week you were ill, or in the future, for a planned trip.
+While a habit is paused:
+
+- a missed period is skipped: it neither breaks nor extends the current or
+  longest streak, and it is left out of completion rates (`stats`, `month`,
+  the HTML report);
+- completions still count, so a run you log on vacation extends the streak;
+- it isn't listed by `due`, and `list` shows `paused` for today.
+
+Daily and weekday habits are paused day by day (a paused weekend changes
+nothing for a weekday habit). A weekly habit's week is paused when any of its
+days is, since a week with a few days away often can't reach the target.
+Overlapping or back-to-back pauses are merged into one. `unpause` ends the
+pause that contains `--date` (default today) so it stops the day before, or
+removes it if it hadn't started yet; `--all` removes every pause.
+`stats` lists the pauses in its window (`pauses` in `--json`, each with `from`,
+`to` and `days`).
+
+Captured on Tuesday 2026-11-10 from a separate made-up database: a daily `Run`
+habit logged from 27 October to 1 November and again from 7 to 9 November.
+
+```
+$ habitlog list
+HABIT  EVERY  TARGET  TODAY  STREAK  BEST
+Run    daily  1       -      3d      6d
+$ habitlog pause Run --from 2026-11-02 --to 2026-11-06
+Paused 'Run' from 2026-11-02 to 2026-11-06 (5 days). Missed days in a pause don't break the streak; completions still count.
+$ habitlog list
+HABIT  EVERY  TARGET  TODAY  STREAK  BEST
+Run    daily  1       -      9d      9d
+$ habitlog pause Run --days 3
+Paused 'Run' from 2026-11-10 to 2026-11-12 (3 days). Missed days in a pause don't break the streak; completions still count.
+$ habitlog due
+All done for 2026-11-10.
+$ habitlog pause Run --list
+Pauses of 'Run':
+  2026-11-02 to 2026-11-06 (5 days)
+  2026-11-10 to 2026-11-12 (3 days) (now)
+$ habitlog unpause Run
+Removed the pause of 'Run': 2026-11-10 to 2026-11-12 (3 days).
+```
+
+Pauses are not yet part of export/import, and heatmaps don't mark paused days
+yet (see the roadmap).
 
 ### Export and import
 

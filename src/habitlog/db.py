@@ -9,17 +9,18 @@ import sys
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from .streaks import FREQUENCIES, parse_date
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXPORT_FORMAT = "habitlog-export"
 EXPORT_VERSION = 1
 MAX_NAME_LENGTH = 100
 MAX_NOTE_LENGTH = 500
+MAX_PAUSE_DAYS = 366
 
 
 class HabitlogError(Exception):
@@ -188,10 +189,27 @@ def _migrate_to_2(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE completions ADD COLUMN note TEXT")
 
 
+def _migrate_to_3(conn: sqlite3.Connection) -> None:
+    # Date ranges (inclusive) during which a habit is paused (``habitlog pause``).
+    conn.execute(
+        """
+        CREATE TABLE pauses (
+            id        INTEGER PRIMARY KEY,
+            habit_id  INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+            first_day TEXT    NOT NULL,
+            last_day  TEXT    NOT NULL,
+            CHECK (first_day <= last_day)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX idx_pauses_habit ON pauses (habit_id, first_day)")
+
+
 # Migration N upgrades a database from schema version N - 1 to N.
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migrate_to_1,
     2: _migrate_to_2,
+    3: _migrate_to_3,
 }
 
 
@@ -459,6 +477,101 @@ def completion_log(
         for r in conn.execute(sql, params)
     ]
     return entries, total
+
+
+# --------------------------------------------------------------------------- pauses
+
+
+@dataclass(frozen=True)
+class Pause:
+    """An inclusive range of days during which a habit is paused."""
+
+    first: date
+    last: date
+
+    @property
+    def days(self) -> int:
+        return (self.last - self.first).days + 1
+
+
+def list_pauses(conn: sqlite3.Connection, habit: Habit) -> list[Pause]:
+    rows = conn.execute(
+        "SELECT first_day, last_day FROM pauses WHERE habit_id = ? ORDER BY first_day",
+        (habit.id,),
+    )
+    return [Pause(date.fromisoformat(r[0]), date.fromisoformat(r[1])) for r in rows]
+
+
+def paused_days(conn: sqlite3.Connection, habit: Habit) -> frozenset[date]:
+    """Every paused day of ``habit``, ready for the ``paused`` argument in ``streaks``."""
+    days: set[date] = set()
+    for p in list_pauses(conn, habit):
+        days.update(p.first + timedelta(days=i) for i in range(p.days))
+    return frozenset(days)
+
+
+def add_pause(conn: sqlite3.Connection, habit: Habit, first: date, last: date) -> Pause:
+    """Pause ``habit`` from ``first`` to ``last`` (inclusive).
+
+    Overlapping or directly adjacent pauses are merged into one, so the stored
+    ranges never overlap. Returns the resulting (possibly merged) pause.
+    """
+    if last < first:
+        raise HabitlogError(
+            f"pause ends ({last.isoformat()}) before it starts ({first.isoformat()})"
+        )
+    if (last - first).days + 1 > MAX_PAUSE_DAYS:
+        raise HabitlogError(
+            f"a pause can be at most {MAX_PAUSE_DAYS} days; archive the habit instead"
+        )
+    one = timedelta(days=1)
+    with transaction(conn):
+        rows = conn.execute(
+            "SELECT id, first_day, last_day FROM pauses "
+            "WHERE habit_id = ? AND first_day <= ? AND last_day >= ?",
+            (habit.id, (last + one).isoformat(), (first - one).isoformat()),
+        ).fetchall()
+        for r in rows:
+            first = min(first, date.fromisoformat(r["first_day"]))
+            last = max(last, date.fromisoformat(r["last_day"]))
+            conn.execute("DELETE FROM pauses WHERE id = ?", (r["id"],))
+        conn.execute(
+            "INSERT INTO pauses (habit_id, first_day, last_day) VALUES (?, ?, ?)",
+            (habit.id, first.isoformat(), last.isoformat()),
+        )
+    return Pause(first, last)
+
+
+def end_pause(conn: sqlite3.Connection, habit: Habit, day: date) -> Pause | None:
+    """End the pause that contains ``day`` or starts after it.
+
+    A pause that began before ``day`` is cut short so its last day is the day
+    before; one that starts on or after ``day`` is removed. Returns the pause
+    as it was before the change, or ``None`` if there was nothing to end.
+    """
+    row = conn.execute(
+        "SELECT id, first_day, last_day FROM pauses WHERE habit_id = ? AND last_day >= ? "
+        "ORDER BY first_day LIMIT 1",
+        (habit.id, day.isoformat()),
+    ).fetchone()
+    if row is None:
+        return None
+    old = Pause(date.fromisoformat(row["first_day"]), date.fromisoformat(row["last_day"]))
+    with transaction(conn):
+        if old.first < day:
+            conn.execute(
+                "UPDATE pauses SET last_day = ? WHERE id = ?",
+                ((day - timedelta(days=1)).isoformat(), row["id"]),
+            )
+        else:
+            conn.execute("DELETE FROM pauses WHERE id = ?", (row["id"],))
+    return old
+
+
+def clear_pauses(conn: sqlite3.Connection, habit: Habit) -> int:
+    """Remove every pause of ``habit``; returns how many there were."""
+    with transaction(conn):
+        return conn.execute("DELETE FROM pauses WHERE habit_id = ?", (habit.id,)).rowcount
 
 
 # --------------------------------------------------------------------------- export / import
