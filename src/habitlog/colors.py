@@ -16,6 +16,7 @@ WHEN_CHOICES = ("auto", "always", "never")
 RESET = "\033[0m"
 # Heatmap shades by level (0 none .. 3 target met): grey, then three greens.
 SHADE_STYLES = ("90", "2;32", "32", "1;32")
+PAUSED_STYLE = "36"  # paused days in heatmaps (cyan, like the `paused` status)
 # list TODAY column.
 STATUS_STYLES = {"done": "1;32", "rest": "90", "partial": "33", "paused": "36"}
 

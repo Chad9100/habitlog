@@ -45,7 +45,7 @@ Estimates are rough working hours for one person, including tests and docs.
 - [x] Carry pauses through JSON export/import (merged, idempotent, old exports
       still import) and make `due` say when habits are paused rather than
       done (split out of the item above) - 0.75 h
-- [ ] Mark paused days in the terminal heatmaps, `month` and the HTML report
+- [x] Mark paused days in the terminal heatmaps, `month` and the HTML report
       (split out of the item above) - 1 h
 
 ## v0.5 - Sync via a plain file (about 5 h)

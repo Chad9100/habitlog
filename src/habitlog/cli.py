@@ -465,7 +465,7 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     compact = args.compact or args.year
     for line in heatmap.render(
         counts, day_target, today, args.weeks, ascii=use_ascii, compact=compact,
-        color=args.color_on,
+        color=args.color_on, paused=paused,
     ):
         print(line)
     shown = notes[-args.notes:] if args.notes else []
@@ -663,6 +663,7 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
         grid = heatmap.month_grid(
             counts, 1 if weekly else h.target, month, today, ascii=use_ascii,
             week_target=h.target if weekly else None, color=args.color_on,
+            paused=db.paused_days(conn, h),
         )
         for line in grid:
             print(line)
@@ -676,13 +677,17 @@ def cmd_month(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
     tens, units = heatmap.month_day_header(month)
     print(title.ljust(width) + tens)
     print(" " * width + units)
+    first, last = month, heatmap.month_end(month)
+    any_paused = False
     for name, (h, counts, rate) in zip(names, data):
+        paused = db.paused_days(conn, h)
+        any_paused = any_paused or any(first <= d <= last for d in paused)
         strip = heatmap.month_strip(
             counts, 1 if h.every == "weekly" else h.target, month, today, ascii=use_ascii,
-            color=args.color_on,
+            color=args.color_on, paused=paused,
         )
         print(f"{name.ljust(width)}{strip}  {_rate_text(rate, h.every)}")
-    print(heatmap.legend(use_ascii, args.color_on))
+    print(heatmap.legend(use_ascii, args.color_on, any_paused))
     return EXIT_OK
 
 
@@ -714,6 +719,7 @@ def cmd_report(args: argparse.Namespace, conn: sqlite3.Connection, today: date) 
                 current_streak=streaks.current_streak(counts, h.every, h.target, today, paused),
                 longest_streak=streaks.longest_streak(counts, h.every, h.target, today, paused),
                 notes=notes,
+                paused=paused,
             )
         )
     title = args.title or "Habit report"

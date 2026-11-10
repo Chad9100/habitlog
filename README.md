@@ -700,8 +700,45 @@ Removed the pause of 'Run': 2026-11-10 to 2026-11-12 (3 days).
 
 When some habits are met and the rest are paused, `due` says so
 (`All done for 2026-11-10 (1 habit paused).`), and `due --json` has a `paused`
-count. Pauses travel with export/import (see below). Heatmaps don't mark
-paused days yet (see the roadmap).
+count. Pauses travel with export/import (see below).
+
+Paused days show as `~` in the `stats` heatmaps (including `--year`/`--compact`),
+in `month` and in the HTML report (a blue square with "(paused)" in its
+tooltip), and the legend gains a `~ paused` entry. Only days without a
+completion are marked; a day you did log keeps its shade. With the same demo
+habit and its first pause (2-6 November):
+
+```
+$ habitlog stats Run --weeks 3 --ascii
+Run  (daily, target 1)
+  Last 3 weeks: 9/9 days met (100.0%)
+  Current streak: 9 days
+  Longest streak: 9 days
+  Total completions: 9
+  Paused: 2026-11-02 to 2026-11-06 (5 days)
+
+    Oct
+Mon . ~ #
+Tue # ~ .
+Wed # ~
+Thu # ~
+Fri # ~
+Sat # #
+Sun # #
+. none  - some  + half+  # target met  ~ paused
+$ habitlog month Run --ascii
+Run  November 2026  (daily, target 1)
+  4/4 days met (100%)
+
+ Mon Tue Wed Thu Fri Sat Sun
+                          1#
+  2~  3~  4~  5~  6~  7#  8#
+  9# 10. 11  12  13  14  15
+ 16  17  18  19  20  21  22
+ 23  24  25  26  27  28  29
+ 30
+. none  - some  + half+  # target met  ~ paused
+```
 
 ### Export and import
 
