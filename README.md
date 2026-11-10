@@ -819,6 +819,22 @@ $ habitlog --db laptop.db sync sync.json
 Synced with sync.json: pulled 1 new habit, 1 completion, 0 notes, 0 pauses; file already up to date.
 ```
 
+`--dry-run` does the whole merge on a throwaway copy and prints what would
+change, without touching the database or the file.
+
+If a habit's `every`, `target` or `archived` differs between the file and this
+database, sync keeps this database's value and prints a `Conflict:` line for
+each difference. There are no edit timestamps, so it can't tell which side is
+newer, and the file is then rewritten with this copy's settings (the copy that
+syncs last wins). Run with `--dry-run` first to see conflicts before they are
+written.
+
+```
+$ habitlog --db b.db sync s.json --dry-run
+Dry run for s.json: would pull 0 new habits, 0 completions, 0 notes, 0 pauses; file would be updated.
+Conflict: 'Read' target is 1 here but 3 in the file; kept 1.
+```
+
 Sync only adds: a completion you undo, or a habit you remove, comes back at the
 next sync from any copy that still has it. Propagating deletions is planned.
 

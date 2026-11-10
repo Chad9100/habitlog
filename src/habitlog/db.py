@@ -624,6 +624,8 @@ class ImportResult:
     notes_added: int = 0
     notes_skipped: int = 0
     pauses_added: int = 0
+    # (habit name, setting, kept local value, differing imported value)
+    conflicts: tuple[tuple[str, str, Any, Any], ...] = ()
 
 
 def _validate_import(data: Any, today: date) -> list[dict[str, Any]]:
@@ -735,9 +737,13 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
     Pauses are merged with the habit's own (overlapping or adjacent ranges
     join); one already covered by an existing pause changes nothing and isn't
     counted in ``pauses_added``.
+
+    When an existing habit's every/target/archived differ from the import,
+    the local value is kept and the difference is listed in ``conflicts``.
     """
     habits = _validate_import(data, today)
     created = existing = added = notes_added = notes_skipped = pauses_added = 0
+    conflicts: list[tuple[str, str, Any, Any]] = []
     with transaction(conn):
         for h in habits:
             row = conn.execute(
@@ -761,6 +767,13 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
             else:
                 habit_id = row["id"]
                 existing += 1
+                for field, local, theirs in (
+                    ("every", row["every"], h["every"]),
+                    ("target", row["target"], h["target"]),
+                    ("archived", bool(row["archived"]), h["archived"]),
+                ):
+                    if local != theirs:
+                        conflicts.append((row["name"], field, local, theirs))
             have = {
                 r["day"]: int(r["total"])
                 for r in conn.execute(
@@ -817,4 +830,6 @@ def import_data(conn: sqlite3.Connection, data: Any, today: date) -> ImportResul
                 if covered is None:
                     _merge_pause(conn, habit_id, p.first, p.last)
                     pauses_added += 1
-    return ImportResult(created, existing, added, notes_added, notes_skipped, pauses_added)
+    return ImportResult(
+        created, existing, added, notes_added, notes_skipped, pauses_added, tuple(conflicts)
+    )

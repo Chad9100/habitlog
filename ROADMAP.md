@@ -53,8 +53,10 @@ Estimates are rough working hours for one person, including tests and docs.
 - [x] `habitlog sync FILE`: two-way merge with a JSON file kept in a synced
       folder (Dropbox, Syncthing, a git repo); builds on the idempotent import
       (additive only; deletions are the next item) - 1.5 h
-- [ ] Sync conflict handling for edited habit settings (every/target/archived
-      differ between copies) and a `--dry-run` preview - 1.5 h
+- [x] `sync --dry-run` preview, and report (keep local, list differences) when
+      every/target/archived differ between copies (split from the item below) - 1 h
+- [ ] Choose a winner for setting conflicts (`--prefer file|local`) instead of
+      always keeping the local value - 0.5 h
 - [ ] Track deletions/undos in the sync file so they propagate instead of being
       re-imported - 2 h
 

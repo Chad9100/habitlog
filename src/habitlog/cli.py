@@ -806,10 +806,21 @@ def cmd_sync(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
             raise HabitlogError(f"cannot read {path}: {exc.strerror or exc}") from None
         except json.JSONDecodeError as exc:
             raise HabitlogError(f"{path} is not valid JSON: {exc}") from None
-        result = db.import_data(conn, before, today)
-    merged = db.export_data(conn)
+        target = conn
+        if args.dry_run:  # merge into a throwaway copy so nothing is saved
+            target = sqlite3.connect(":memory:")
+            target.row_factory = sqlite3.Row
+            conn.backup(target)
+        try:
+            result = db.import_data(target, before, today)
+            merged = db.export_data(target)
+        finally:
+            if target is not conn:
+                target.close()
+    else:
+        merged = db.export_data(conn)
     changed = before != merged
-    if changed:
+    if changed and not args.dry_run:
         tmp = path.with_name(path.name + ".tmp")
         try:
             tmp.write_text(
@@ -821,15 +832,22 @@ def cmd_sync(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
         except OSError as exc:
             raise HabitlogError(f"cannot write {path}: {exc.strerror or exc}") from None
     if result is None:
-        print(f"Created {path} with {_plural(len(merged['habits']), 'habit')}.")
+        verb = "Would create" if args.dry_run else "Created"
+        print(f"{verb} {path} with {_plural(len(merged['habits']), 'habit')}.")
     else:
+        if args.dry_run:
+            head, tail = f"Dry run for {path}: would pull", "file would be updated."
+        else:
+            head, tail = f"Synced with {path}: pulled", "file updated."
         print(
-            f"Synced with {path}: pulled {_plural(result.habits_created, 'new habit')}, "
+            f"{head} {_plural(result.habits_created, 'new habit')}, "
             f"{_plural(result.completions_added, 'completion')}, "
             f"{_plural(result.notes_added, 'note')}, "
             f"{_plural(result.pauses_added, 'pause')}; "
-            + ("file updated." if changed else "file already up to date.")
+            + (tail if changed else "file already up to date.")
         )
+        for name, field, local, theirs in result.conflicts:
+            print(f"Conflict: '{name}' {field} is {local} here but {theirs} in the file; kept {local}.")
     return EXIT_OK
 
 
@@ -1053,6 +1071,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("sync", cmd_sync, "merge with a JSON file in both directions (e.g. a synced folder)")
     p.add_argument("file", help="sync file; created if it does not exist")
+    p.add_argument("--dry-run", action="store_true", help="show what would change; save nothing")
     return parser
 
 
