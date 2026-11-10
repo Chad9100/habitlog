@@ -41,7 +41,8 @@ scripted (`--json` output, JSON import/export).
 - Archive habits to hide them without losing history.
 - `stats`: completion rate over the last N weeks plus a heatmap (falls back to
   ASCII automatically when the console can't show block characters, or with
-  `--ascii`).
+  `--ascii`). `stats --year` shows the last 53 weeks in a compact layout with a
+  gap between months that fits in 80 columns.
 - Export to CSV or JSON; import JSON back. Import is idempotent: importing the
   same file twice does not duplicate completions.
 
@@ -458,6 +459,55 @@ Thu . . . . . . .
 Fri # # # # # # #
 Sat . . . . . . .
 Sun . . . . . . .
+. none  - some  + half+  # target met
+```
+
+### A year at a glance
+
+`--year` covers the last 53 weeks and switches to the compact layout: one
+character per week and a blank column between months, so a whole year fits in
+about 70 columns. A week belongs to the month that holds its Thursday (the ISO
+8601 rule), so the week of Mon 26 Oct - Sun 1 Nov counts as October. This
+demo database has about eleven months of made-up history with a summer slump:
+
+```
+$ habitlog stats "Read 20 pages" --year --notes 0
+Read 20 pages  (daily, target 1)
+  Last 53 weeks: 278/329 days met (84.5%)
+  Current streak: 12 days
+  Longest streak: 28 days
+  Total completions: 278
+
+    Nov Dec  Jan   Feb  Mar  Apr   May  Jun  Jul   Aug  Sep  Oct   Nov
+Mon ··· ··██ █████ ████ ████ █████ ████ ··██ ·██·█ ██·█ ·███ █████ █·
+Tue ··· ··██ █████ ████ ██·· █·███ ██·█ ████ ···██ ██·█ ███· ████· █
+Wed ··· ··██ ███·█ ████ ████ █·███ ████ ███· █··█· ·███ ████ █████ █
+Thu ··· ··██ ·████ ████ ████ ████· ████ ████ ··█·· ██·· ████ █████ █
+Fri ··· ··██ █████ █·██ ████ █████ ████ ·█·█ █·██· ██·█ ████ █████ █
+Sat ··· ··██ █████ ·███ █·██ █████ ███· ████ █··██ ██·█ ████ █████ █
+Sun ··· ··██ █████ ████ ████ ·████ ████ █·██ █···█ ██·█ ████ ·██·█ █
+· none  ░ some  ▓ half+  █ target met
+```
+
+`--compact` gives the same layout for any `--weeks` (`--year` and `--weeks`
+can't be combined):
+
+```
+$ habitlog stats Gym --weeks 20 --compact --ascii
+Gym  (weekly, target 3)
+  Last 20 weeks: 10/19 weeks met (52.6%)
+  Current streak: 1 week
+  Longest streak: 4 weeks
+  Total completions: 108
+
+    Jul   Aug  Sep  Oct   Nov
+Mon ###.# #### #### ##### #.
+Tue ..... .... .... ..... .
+Wed .#### ##.# ###. ##### #
+Thu ..... .... .... ..... .
+Fri #.#.. #### .#.# ####. #
+Sat ..... .... .... ..... .
+Sun ..... .... .... ..... .
 . none  - some  + half+  # target met
 ```
 

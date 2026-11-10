@@ -16,6 +16,7 @@ from .db import Habit, HabitlogError
 
 EXIT_OK = 0
 EXIT_ERROR = 1  # usage errors detected by argparse exit with 2
+YEAR_WEEKS = 53  # stats --year: a full year plus the current week
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # locale-independent
 
 
@@ -306,6 +307,10 @@ def cmd_list(args: argparse.Namespace, conn: sqlite3.Connection, today: date) ->
 
 def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -> int:
     habit = db.get_habit(conn, args.name)
+    if args.year:
+        args.weeks = YEAR_WEEKS
+    elif args.weeks is None:
+        args.weeks = 12
     counts = db.completion_counts(conn, habit)
     since = min([habit.created, *counts]) if counts else habit.created
     rate = streaks.completion_rate(counts, habit.every, habit.target, today, args.weeks, since)
@@ -355,7 +360,10 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection, today: date) -
         print(line)
     use_ascii = args.ascii or not can_encode("".join(heatmap.UNICODE_CHARS))
     day_target = 1 if habit.every == "weekly" else habit.target
-    for line in heatmap.render(counts, day_target, today, args.weeks, ascii=use_ascii):
+    compact = args.compact or args.year
+    for line in heatmap.render(
+        counts, day_target, today, args.weeks, ascii=use_ascii, compact=compact
+    ):
         print(line)
     shown = notes[-args.notes:] if args.notes else []
     if shown:
@@ -661,9 +669,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("stats", cmd_stats, "completion rate, streaks and a calendar heatmap")
     p.add_argument("name")
-    p.add_argument("--weeks", type=_positive_int, default=12)
+    span = p.add_mutually_exclusive_group()
+    span.add_argument("--weeks", type=_positive_int, help="weeks to cover (default 12)")
+    span.add_argument(
+        "--year", action="store_true",
+        help=f"cover the last {YEAR_WEEKS} weeks in the compact layout (fits 80 columns)",
+    )
     p.add_argument("--json", action="store_true")
     p.add_argument("--ascii", action="store_true", help="plain ASCII heatmap")
+    p.add_argument(
+        "--compact", action="store_true",
+        help="one character per week with a gap between months",
+    )
     p.add_argument(
         "--notes", type=_nonnegative_int, default=5, metavar="N",
         help="show the N most recent notes in the window (default 5, 0 hides them)",

@@ -26,8 +26,8 @@ Estimates are rough working hours for one person, including tests and docs.
 
 - [x] `habitlog report --html report.html`: a single self-contained HTML file
       with a year heatmap per habit and summary table - 4 h
-- [ ] Year-long heatmap in the terminal (`stats --weeks 53` layout tuned for
-      wide terminals, month separators) - 1 h
+- [x] Year-long heatmap in the terminal: `stats --year` (53 weeks) and
+      `--compact`, one column per week with month separators, fits 80 columns - 1 h
 - [ ] Optional colour output (respecting `NO_COLOR` and non-TTY output) - 1 h
 
 ## v0.4 - Reminders and profiles (about 7 h)

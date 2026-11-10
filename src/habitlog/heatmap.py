@@ -33,17 +33,24 @@ def render(
     today: date,
     weeks: int = 12,
     ascii: bool = False,
+    compact: bool = False,
 ) -> list[str]:
     """Render the last ``weeks`` weeks ending with the week containing ``today``.
 
     ``target`` is the per-day target used for shading. Days after ``today`` are
     left blank. Returns the lines (header, seven weekday rows, legend).
+
+    With ``compact`` each week takes one character instead of two and a blank
+    column separates the months (see :func:`render_compact`), so a whole year
+    fits in about 70 columns.
     """
     if weeks < 1:
         raise ValueError("weeks must be at least 1")
     chars = ASCII_CHARS if ascii else UNICODE_CHARS
     first = week_start(today) - timedelta(weeks=weeks - 1)
     mondays = [first + timedelta(weeks=i) for i in range(weeks)]
+    if compact:
+        return _render_compact(counts, target, today, mondays, chars) + [legend(ascii)]
 
     # Month header: label a column when its Monday starts a new month, as long
     # as the label doesn't collide with the previous one.
@@ -68,6 +75,62 @@ def render(
             cells.append(" " if d > today else chars[level(counts.get(d, 0), target)])
         lines.append(f"{DAY_NAMES[wd]} " + " ".join(cells).rstrip())
     lines.append(legend(ascii))
+    return lines
+
+
+def week_month(monday: date) -> tuple[int, int]:
+    """The (year, month) a week column belongs to: the month of its Thursday.
+
+    This is the ISO 8601 rule (a week belongs to the month holding most of its
+    days), so a week from Mon 28 Oct to Sun 3 Nov counts as October.
+    """
+    thursday = monday + timedelta(days=3)
+    return thursday.year, thursday.month
+
+
+def _render_compact(
+    counts: Mapping[date, int],
+    target: int,
+    today: date,
+    mondays: list[date],
+    chars: tuple,
+) -> list[str]:
+    """One character per week, with a blank separator column between months.
+
+    Columns are grouped by :func:`week_month`. Each group is labelled with its
+    month name when the label fits before the next group starts (a group of
+    one week at the left edge stays unlabelled); the last group may always be
+    labelled because nothing follows it.
+    """
+    groups: list[list[date]] = []
+    keys: list[tuple[int, int]] = []
+    for monday in mondays:
+        key = week_month(monday)
+        if keys and keys[-1] == key:
+            groups[-1].append(monday)
+        else:
+            groups.append([monday])
+            keys.append(key)
+
+    header = ""
+    pos = 0
+    for i, group in enumerate(groups):
+        name = MONTH_NAMES[keys[i][1] - 1]
+        last = i == len(groups) - 1
+        if last or len(name) <= len(group) + 1:
+            header = header.ljust(pos) + name
+        pos += len(group) + 1
+
+    lines = [" " * _ROW_LABEL_WIDTH + header.rstrip()]
+    for wd in range(7):
+        blocks = []
+        for group in groups:
+            cells = []
+            for monday in group:
+                d = monday + timedelta(days=wd)
+                cells.append(" " if d > today else chars[level(counts.get(d, 0), target)])
+            blocks.append("".join(cells))
+        lines.append(f"{DAY_NAMES[wd]} " + " ".join(blocks).rstrip())
     return lines
 
 
